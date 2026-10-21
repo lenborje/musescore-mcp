@@ -91,6 +91,11 @@ class MuseScoreMCP:
             """Get information about the current score."""
             return await self.client.send_command("getScore")
         
+        @self.mcp.tool()
+        async def get_score_metadata():
+            """Get metadata about the current score (title, composer, measures, staves, time/key signatures)."""
+            return await self.client.send_command("getScoreMetadata")
+        
         # Cursor & Navigation Tools
         @self.mcp.tool()
         async def get_cursor_info():
@@ -175,6 +180,10 @@ class MuseScoreMCP:
 
         class getScoreAction(TypedDict):
             action: Literal["getScore"]
+            params: Dict[str, Any]
+
+        class getScoreMetadataAction(TypedDict):
+            action: Literal["getScoreMetadata"]
             params: Dict[str, Any]
 
         class addNoteParams(TypedDict):
@@ -267,7 +276,7 @@ class MuseScoreMCP:
             params: Dict[str, Any]
 
         
-        type ActionSequence = List[getScoreAction | addNoteAction | addRestAction | addTupletAction | appendMeasureAction | deleteSelectionAction | getCursorInfoAction | goToMeasureAction | nextElementAction | prevElementAction | selectCurrentMeasureAction | insertMeasureAction | goToFinalMeasureAction | goToBeginningOfScoreAction | setTimeSignatureAction | undoAction | nextStaffAction | prevStaffAction]
+        type ActionSequence = List[getScoreAction | getScoreMetadataAction | addNoteAction | addRestAction | addTupletAction | appendMeasureAction | deleteSelectionAction | getCursorInfoAction | goToMeasureAction | nextElementAction | prevElementAction | selectCurrentMeasureAction | insertMeasureAction | goToFinalMeasureAction | goToBeginningOfScoreAction | setTimeSignatureAction | undoAction | nextStaffAction | prevStaffAction]
 
         @self.mcp.tool()
         async def processSequence(sequence: ActionSequence):

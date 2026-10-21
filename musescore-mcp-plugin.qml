@@ -4,9 +4,10 @@ import MuseScore 3.0
 MuseScore {
     id: root
     menuPath: "Plugins.MuseScore API Server"
+    requiresScore: false
     description: "Exposes MuseScore API via WebSocket"
     version: "1.0"
-    
+
     property var clientConnections: []
     
     // Global state to track selection position
@@ -46,6 +47,7 @@ MuseScore {
 
         var validCommands = [
             "getScore",
+            "getScoreMetadata",
             "addNote",
             "addRest",
             "addTuplet",
@@ -74,9 +76,17 @@ MuseScore {
                 processCommand(params.sequence[i]);
             }
 
-            return { success: true, message: "Sequence processed", currentSelection: selectionState, currentScore: getScoreSummary() };
+            // Try to get score summary, but don't let it break the response
+            var scoreSummary = null;
+            try {
+                scoreSummary = getScoreSummary();
+            } catch (sse) {
+                scoreSummary = { error: "Score summary failed: " + sse.toString() };
+            }
+
+            return { success: true, message: "Sequence processed", currentSelection: selectionState, currentScore: scoreSummary };
         } catch (e) {
-            return { error: e.toString() };
+            return { error: e.toString(), currentSelection: selectionState };
         }
     }
     
@@ -86,6 +96,8 @@ MuseScore {
             // Basic score operations
             case "getScore":
                 return getScore(command.params);
+            case "getScoreMetadata":
+                return getScoreMetadata(command.params);
             case "syncStateToSelection":
                 return syncStateToSelection();
                 
@@ -425,9 +437,15 @@ MuseScore {
 
     function processElement(element) {
         if (!curScore) return { error: "No score open" };
+        if (!element) return { name: "null", durationTicks: 0 };
 
         var name = element.name;
-        var processedElement
+        var processedElement;
+
+        // Safely get duration info
+        var durType = (element.durationType && element.durationType.type !== undefined) ? element.durationType.type : null;
+        var durDots = (element.durationType && element.durationType.dots !== undefined) ? element.durationType.dots : 0;
+        var durTicks = (element.actualDuration && element.actualDuration.ticks !== undefined) ? element.actualDuration.ticks : 0;
 
         if (name == "Note") {
             processedElement = {
@@ -436,9 +454,9 @@ MuseScore {
                 subtypeName: element.subtypeName,
                 tempo: element.tempo,
                 timesig: element.timesig,
-                baseDuration: getDurationName(element.durationType.type),
-                dotted: element.durationType.dots,
-                durationTicks: element.actualDuration.ticks,
+                baseDuration: durType !== null ? getDurationName(durType) : null,
+                dotted: durDots,
+                durationTicks: durTicks,
                 harmonyType: element.harmonyType,
                 accidental: element.accidental,
                 accidentalType: element.accidentalType,
@@ -447,13 +465,13 @@ MuseScore {
                 noteType: element.noteType,
                 pitchMidi: element.pitch,
                 pitchName: getNoteName(element.pitch),
-                tuplet: element.tuplet ? {   
+                tuplet: element.tuplet ? {
                         durationNumerator: element.tuplet.duration.numerator,
                         durationDenominator: element.tuplet.duration.denominator,
-                } : null 
+                } : null
             }
-        } 
-            
+        }
+
         else if (name == "Rest") {
             processedElement = {
                 name: element.name,
@@ -461,14 +479,14 @@ MuseScore {
                 subtypeName: element.subtypeName,
                 tempo: element.tempo,
                 timesig: element.timesig,
-                baseDuration: getDurationName(element.durationType.type),
-                dotted: element.durationType.dots,
-                durationTicks: element.actualDuration.ticks,
+                baseDuration: durType !== null ? getDurationName(durType) : null,
+                dotted: durDots,
+                durationTicks: durTicks,
                 harmonyType: element.harmonyType,
-                tuplet: element.tuplet ? {   
+                tuplet: element.tuplet ? {
                         durationNumerator: element.tuplet.duration.numerator,
                         durationDenominator: element.tuplet.duration.denominator,
-                } : null                    
+                } : null
             }
         }
 
@@ -479,12 +497,12 @@ MuseScore {
                 subtypeName: element.subtypeName,
                 tempo: element.tempo,
                 timesig: element.timesig,
-                baseDuration: getDurationName(element.durationType.type),
-                dotted: element.durationType.dots,
-                durationTicks: element.actualDuration.ticks,
+                baseDuration: durType !== null ? getDurationName(durType) : null,
+                dotted: durDots,
+                durationTicks: durTicks,
                 noteType: element.noteType,
-                notes: Object.keys(element.notes).map(k => ({ pitchMidi: element.notes[k].pitch, pitchName: getNoteName(element.notes[k].pitch)})),
-                tuplet: element.tuplet ? {   
+                notes: element.notes ? Object.keys(element.notes).map(k => ({ pitchMidi: element.notes[k].pitch, pitchName: getNoteName(element.notes[k].pitch) })) : [],
+                tuplet: element.tuplet ? {
                         durationNumerator: element.tuplet.duration.numerator,
                         durationDenominator: element.tuplet.duration.denominator,
                 } : null
@@ -492,7 +510,12 @@ MuseScore {
         }
 
         else {
-            processedElement = Object.keys(element);
+            // For other element types (Clef, KeySig, TimeSig, BarLine, etc.)
+            processedElement = {
+                name: element.name || "unknown",
+                type: element.type !== undefined ? element.type : null,
+                durationTicks: durTicks
+            };
         }
 
         return processedElement;
@@ -1389,10 +1412,28 @@ MuseScore {
             var tempSelectionState = selectionState;
 
             var score = {
+                title: "",
+                composer: "",
+                lyricist: "",
+                copyright: "",
                 numMeasures: curScore.nmeasures,
+                numStaves: curScore.nstaves,
                 measures: [],
                 staves: []
             };
+
+            // Try to get score metadata
+            try {
+                var metaTags = curScore.metaTags;
+                if (metaTags) {
+                    score.title = metaTags["workTitle"] || metaTags["title"] || "";
+                    score.composer = metaTags["composer"] || "";
+                    score.lyricist = metaTags["lyricist"] || "";
+                    score.copyright = metaTags["copyright"] || "";
+                }
+            } catch (me) {
+                console.log("Could not read metaTags: " + me.toString());
+            }
             
             // Analyze each staff
             for (var i = 0; i < curScore.nstaves; i++) {
@@ -1406,11 +1447,20 @@ MuseScore {
                 }
                 
                 if (staff) {
-                    score.staves.push({
+                    var staffInfo = {
                         name: `staff${i}`,
-                        shortName: staff.shortName,
+                        shortName: staff.shortName || "",
                         visible: !staff.invisible
-                    });
+                    };
+                    // Try to get instrument name
+                    try {
+                        if (staff.part && staff.part.instrumentName) {
+                            staffInfo.instrument = staff.part.instrumentName;
+                        } else if (staff.instrumentName) {
+                            staffInfo.instrument = staff.instrumentName;
+                        }
+                    } catch (ie) {}
+                    score.staves.push(staffInfo);
                 } else {
                     score.staves.push({
                         name: `staff${i}`
@@ -1456,7 +1506,7 @@ MuseScore {
             // now, iterate through the staffs and process each measure's elements
 
             for (var k = 0; k < curScore.nstaves; k++) {
-                
+
                 // rewind cursor to beginning of selection
                 cursor.rewind(0);
 
@@ -1466,20 +1516,30 @@ MuseScore {
                 // walk through the elements
 
                 while (true) {
-                    var staffIdx = cursor.staffIdx;
                     var element = cursor.element;
-                
+
                     // figure out which measure the element is in
                     var measureIdx = measureBoundaries.filter(tick => tick <= cursor.tick).length - 1;
+                    if (measureIdx < 0) measureIdx = 0;
 
                     // process element, add to measure and increment count
                     score.measures[measureIdx].numElements++;
 
                     if (element) {
-                        var processedElement = processElement(element);
-                        processedElement.startTick = cursor.tick;
-                                
-                        score.measures[measureIdx].elements[`staff${staffIdx}`].push(processedElement);
+                        try {
+                            var processedElement = processElement(element);
+                            processedElement.startTick = cursor.tick;
+                            // Use k (loop variable) not cursor.staffIdx which may change during next()
+                            score.measures[measureIdx].elements[`staff${k}`].push(processedElement);
+                        } catch (pe) {
+                            console.log("Error processing element: " + pe.toString());
+                            score.measures[measureIdx].elements[`staff${k}`].push({
+                                name: "error",
+                                error: pe.toString(),
+                                durationTicks: 0,
+                                startTick: cursor.tick
+                            });
+                        }
                     }
 
                     if (!cursor.next()) break;
@@ -1509,6 +1569,104 @@ MuseScore {
             var analysis = getScoreSummary()
             return { success: true, analysis: analysis };
         } catch (e) {
+            return { error: e.toString() };
+        }
+    }
+
+    // Get just metadata without iterating all elements (fast)
+    function getScoreMetadata(params) {
+        if (!curScore) return { error: "No score open" };
+
+        try {
+            var meta = {
+                title: "",
+                composer: "",
+                lyricist: "",
+                copyright: "",
+                numMeasures: curScore.nmeasures,
+                numStaves: curScore.nstaves,
+                staves: [],
+                measures: []
+            };
+
+            // Try to get score metadata
+            try {
+                var metaTags = curScore.metaTags;
+                if (metaTags) {
+                    meta.title = metaTags["workTitle"] || metaTags["title"] || "";
+                    meta.composer = metaTags["composer"] || "";
+                    meta.lyricist = metaTags["lyricist"] || "";
+                    meta.copyright = metaTags["copyright"] || "";
+                }
+            } catch (me) {}
+
+            // Analyze each staff
+            for (var i = 0; i < curScore.nstaves; i++) {
+                var staff;
+                if (curScore.staves && curScore.staves.length > i) {
+                    staff = curScore.staves[i];
+                } else if (typeof curScore.staff === "function") {
+                    staff = curScore.staff(i);
+                }
+
+                var staffInfo = { index: i, name: `staff${i}` };
+                if (staff) {
+                    staffInfo.shortName = staff.shortName || "";
+                    staffInfo.visible = !staff.invisible;
+                    try {
+                        if (staff.part && staff.part.instrumentName) {
+                            staffInfo.instrument = staff.part.instrumentName;
+                        } else if (staff.instrumentName) {
+                            staffInfo.instrument = staff.instrumentName;
+                        }
+                    } catch (ie) {}
+                }
+                meta.staves.push(staffInfo);
+            }
+
+            // Get measure boundaries and time/key signatures
+            curScore.startCmd();
+            var cursor = curScore.newCursor();
+            cursor.rewind(0);
+
+            for (var m = 0; m < curScore.nmeasures; m++) {
+                var measureInfo = {
+                    measure: m + 1,
+                    startTick: cursor.tick,
+                    timeSignature: null,
+                    keySignature: null
+                };
+
+                // Check for time signature and key signature at this measure
+                try {
+                    var seg = cursor.segment;
+                    if (seg) {
+                        var annotations = seg.annotations;
+                        if (annotations) {
+                            for (var a = 0; a < annotations.length; a++) {
+                                var ann = annotations[a];
+                                if (ann.name === "TimeSig" || (ann.type !== undefined && ann.type === Element.TIMESIG)) {
+                                    measureInfo.timeSignature = {
+                                        numerator: ann.timesig ? ann.timesig.numerator : (ann.numerator || null),
+                                        denominator: ann.timesig ? ann.timesig.denominator : (ann.denominator || null)
+                                    };
+                                }
+                                if (ann.name === "KeySig" || (ann.type !== undefined && ann.type === Element.KEYSIG)) {
+                                    measureInfo.keySignature = ann.key !== undefined ? ann.key : null;
+                                }
+                            }
+                        }
+                    }
+                } catch (te) {}
+
+                meta.measures.push(measureInfo);
+                cursor.nextMeasure();
+            }
+
+            curScore.endCmd();
+            return { success: true, metadata: meta };
+        } catch (e) {
+            if (curScore) curScore.endCmd(true);
             return { error: e.toString() };
         }
     }
