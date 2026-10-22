@@ -36,11 +36,19 @@ Pluginet körde (dispatchad som `action://extensions/v1/verify-voices.qml?action
 | V16 | **T6: writeScore misslyckades även i tillåten temp-katalog** — rotorsaken synlig i loggen: macOS kanoniserar `/var/folders/...` till `/private/var/folders/...`, som inte matchar tillåtelselisten. Dessutom lyckades den **första** FileIO-skrivningen och blockerades sedan — och körning 1 (inget FileIO) kunde skriva till `/tmp` som inte ens är i listan. Slutsats: FileIO-skrivningar förgiftar sessionen; writeScore själv kontrollerar sökvägen bara i förgiftat tillstånd. | **FileIO avlägsnats ur alla plugin.** Export/backup sker nu till `~/Documents/MuseScore4` (riktig sökväg utan symlänkar, i tillåtelselisten), angiven av servern (`MUSESCORE_MCP_DATA_DIR`). |
 | V17 | **T8: båda delete-koderna dispatchar men `Score::deleteRange` assertar** (edit.cpp:3970, "s1") — raderingen avbröts, inget togs bort, MuseScore kraschade inte. `action://delete` är registrerad; problemet är rå `selectRange` vs notationens selection-tillstånd. | `deleteSelection` omskriven till ärlig verifiering (jämför elementantal före/efter, rapporterar `deleted: true/false`). Känd begränsning dokumenterad i ACTIONS.md. |
 
-## Körning 4 (plugin v0.4, avvaktar)
+## Körning 4 — 2026-10-22 16:30 (plugin v0.4, utan FileIO)
 
-Slimmad regressionssvit utan FileIO — avgör:
-1. T6: fungerar writeScore (musicxml/mscx/mscz) till `~/Documents/MuseScore4` i oförgiftat tillstånd? (Avgör runCode-backupens slutgiltiga hållbarhet; musicxml är oavsett fungerande i körning 1.)
-2. T7-regression: swap + action://undo.
+| # | Faktum | Konsekvens |
+|---|---|---|
+| V18 | **T7-regression grön**: swap via `voice-x12` + `action://undo` fungerar stabilt (tredje bekräftelsen; `action://undo` dispatchar internt vidare till `action://notation/undo`). | Roststödet och undo är klara. |
+| V19 | **T6 misslyckades även utan FileIO och i tillåten katalog** — tyst false (<1 ms), inga varningar i loggen. | Förgiftnings- och sökvägshypoteserna räcker inte. |
+| V20 | **Timingmönster**: writeScore lyckades enbart i körning 1 — den enda som kördes 67 s efter sessionens start; körning 2–4 kördes 11–35 s efter start och misslyckades. MuseScores async-uppstart (MuseSampler-uppdateringskoll ~5–8 s in i sessionen, projekt-/exportscenario-initiering) var sannolikt fortfarande igång. Hypotes: `exportScores()` avböjer tyst medan uppstartsuppgifter pågår. | Avgörande test: kör v0.4 oförändrad **minst 60 s efter** att MuseScore startat (och partituret öppnats). Om T6 då lyckas: rotorsak = startrace; åtgärd = serverside retry + dokumentation. |
+
+## Körning 5 (avvaktar)
+
+v0.4 oförändrad, men med ≥60 s väntetid efter sessionens start. Avgör:
+1. T6 musicxml (produktionens exportkedja: exportScore → music21).
+2. T6 mscx/mscz (runCode-backupens formatutrymme; mscz har dessutom den separata "MscNotationWriter::writeList"-buggen från körning 1).
 
 ## Slutsatser för implementationen (efter körning 1-3)
 
