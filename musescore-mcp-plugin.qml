@@ -70,7 +70,8 @@ MuseScore {
             "setTimeSignature",
             "getVoices",
             "swapVoices",
-            "setVoiceVisibility"
+            "setVoiceVisibility",
+            "exportScore"
         ]
 
         try {
@@ -112,6 +113,8 @@ MuseScore {
                 return swapVoices(command.params);
             case "setVoiceVisibility":
                 return setVoiceVisibility(command.params);
+            case "exportScore":
+                return exportScore(command.params);
             case "syncStateToSelection":
                 return syncStateToSelection();
                 
@@ -862,6 +865,25 @@ MuseScore {
             };
         } catch (e) {
             if (curScore) curScore.endCmd(true);
+            return { error: e.toString() };
+        }
+    }
+
+    // Export the current score to a file (musicxml or mscz) at an absolute
+    // path. params.path should be without extension; writeScore appends the
+    // extension and the written path is reported back.
+    function exportScore(params) {
+        if (!curScore) return { error: "No score open" };
+        if (!params || !params.path) return { error: "path is required (absolute, without extension)" };
+        var fmt = (params.format !== undefined) ? params.format : "musicxml";
+        if (fmt !== "musicxml" && fmt !== "mscz") return { error: "format must be musicxml or mscz" };
+        var base = params.path;
+        var dot = "." + fmt;
+        if (base.slice(-dot.length) === dot) base = base.slice(0, -dot.length);
+        try {
+            var ok = writeScore(curScore, base, fmt);
+            return { success: ok === true, path: base + dot, format: fmt };
+        } catch (e) {
             return { error: e.toString() };
         }
     }
