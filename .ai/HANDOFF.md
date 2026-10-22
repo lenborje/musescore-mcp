@@ -1,6 +1,19 @@
 # Handoff: musescore-mcp — röster, music21, run_qml
 
-Dokumentet är sessionsöverskridande kontext. Läs detta + `ARBETSPLAN.md` innan du fortsätter arbetet. Beslutade i grill-session 2026-10-22 (F1–F27); inget är implementerat ännu.
+Dokumentet är sessionsöverskridande kontext. Läs detta + `ARBETSPLAN.md` + `VERIFIERINGSRESULTAT.md` innan du fortsätter arbetet.
+
+## AKUELLT LÄGE 2026-10-22 (kväll) — läs detta först
+
+Fas 0–3 är implementerade och committade (röster, music21-verktyg, run_qml + docs, se gitloggen). Fem verifieringskörningar har gjorts; **röster, undo, swap, eval och hela run_qml-mekaniken är bevisade fungerande på 4.7.5.** EN fråga är olöst och blockerar music21-kedjan:
+
+**`writeScore` från plugin returnerar tyst `false`** för alla format och alla sökvägar (inkl. tillåtna kataloger) — utom i körning 1 där musicxml till /tmp faktiskt skrevs. Ingen förklaring kvar i källan (4.7.5:s io-lager är restriktionsfritt; se VERIFIERINGSRESULTAT.md, körning 5 + källanalys). Upphör INTE med att anta att writeScore fungerar — det är omtvistat.
+
+Imorgon:
+1. Hämta tskovlund/mcp-scores pluginkällkod från GitHub (src/mcp_score/musescore + src/mcp_score/bridge) — deras CI är grön på 4.7.5; efterlikna deras partiturdata-flöde.
+2. Om deras mönster inte hjälper: implementera plan B — server-side music21-ström ur getScoreSummary-JSON, och server-side JSON-snapshot som runCode-backup (ersätter fil-backupen helt).
+3. Stäng fas 0: dokumentera i VERIFIERINGSRESULTAT.md, uppdatera ARBETSPLAN-status.
+
+Kända runtime-fakta (bevisade, styr implementationen): se tabellen i VERIFIERINGSRESULTAT.md (V1–V21). Viktigast: swap = `cmd("voice-x12")`, undo = `cmd("action://undo")`, eval fungerar, `setVoiceVisible` returvärdet är oanvändbart, FileIO-skrivningar blockeras (macOS /private-kanonisering vs allowlist) — **använd aldrig FileIO i plugin**, delete via cmd assertar (deleteSelection verifierar ärligt), console.log från meny-körda plugins kastas bort (använd api.log.info + MuseScores loggfil).
 
 ## Uppdrag och upphov
 

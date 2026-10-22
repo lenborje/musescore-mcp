@@ -44,11 +44,24 @@ Pluginet körde (dispatchad som `action://extensions/v1/verify-voices.qml?action
 | V19 | **T6 misslyckades även utan FileIO och i tillåten katalog** — tyst false (<1 ms), inga varningar i loggen. | Förgiftnings- och sökvägshypoteserna räcker inte. |
 | V20 | **Timingmönster**: writeScore lyckades enbart i körning 1 — den enda som kördes 67 s efter sessionens start; körning 2–4 kördes 11–35 s efter start och misslyckades. MuseScores async-uppstart (MuseSampler-uppdateringskoll ~5–8 s in i sessionen, projekt-/exportscenario-initiering) var sannolikt fortfarande igång. Hypotes: `exportScores()` avböjer tyst medan uppstartsuppgifter pågår. | Avgörande test: kör v0.4 oförändrad **minst 60 s efter** att MuseScore startat (och partituret öppnats). Om T6 då lyckas: rotorsak = startrace; åtgärd = serverside retry + dokumentation. |
 
-## Körning 5 (avvaktar)
+## Körning 5 — 2026-10-22 16:35 (plugin v0.4, ≥60 s väntan efter start)
 
-v0.4 oförändrad, men med ≥60 s väntetid efter sessionens start. Avgör:
-1. T6 musicxml (produktionens exportkedja: exportScore → music21).
-2. T6 mscx/mscz (runCode-backupens formatutrymme; mscz har dessutom den separata "MscNotationWriter::writeList"-buggen från körning 1).
+| # | Faktum | Konsekvens |
+|---|---|---|
+| V21 | Väntan hölls (session 16:34:31 → plugin 16:35:53 = 82 s). **T6 misslyckades fortfarande** (tyst false, alla format, ingen fil skapad). T7-regression grön. | Timing-hypotesen (V20) är död. Körning 1 är det enda framgående fallet någonsin. |
+
+## Källanalys efter körning 5 (v4.7.5-taggen i ../MuseScore — OBS: 4.7.x var monorepo, io-lagret fanns i huvudrepot då)
+
+- `EngravingPluginAPIHelper::writeScore` (v4.7.5, src/project/internal/engravingpluginapihelper.cpp): `currentNotation()` null → LOGW (frånvarande i loggarna ⇒ notation fanns); `determineWriterUnitType(ext)` null → LOGW "format is not supported" (frånvarande ⇒ writer finns); annars `exportProjectScenario()->exportScores(...)`.
+- `ExportProjectScenario::exportScores` (src/project/internal/exportprojectscenario.cpp): tysta/tidiga utgångar: (1) `writers()->writer(suffix)` null → **tyst false**; (2) supportsUnitType-assert (skulle logga "ASSERT FAILED" — frånvarande); (3) `doExportLoop`-retur Cancel → tyst false.
+- `doExportLoop`: filöppning misslyckas → `askForRetry` (dialog — i pluginkontext kan dialogen inte visas/dotto; körning 1:s ButtonBox-fel var sannolikt en sådan dialog) → Cancel. Writer-fel EFTER lyckad öppning ger en **tom fil** (körning 1:s mscz: 0 byte + MscNotationWriter-varning — den vägen är bevisad). I körning 2–5 finns **inga filer alls** varken tomma (kontrollerat /tmp, /var/folders/…/T och ~/Documents/MuseScore4) ⇒ antingen misslyckades öppningen (QFile::open) eller nåddes aldrig doExportLoop.
+- 4.7.5:s io-lager (src/framework/global/io/internal/filesystem.cpp): `openStream` är ett naket `QFile::open` — **ingen sökvägsrestriktion i io-lagret** i 4.7.5 (restriktionen "fs api restriction" tillkom i muse_framework först sep 2026, efter 4.7.5; 4.7.5 har bara apiv1::isPathAllowed som vaktar FileIO-API:t).
+- Slutsats: den tysta false kommer från `exportScores` — mest sannolikt `writers()->writer(suffix)`-utgången eller en Cancel från doExportLoop — men källan till det kan inte avgöras statiskt; skillnaden mot körning 1 är okänd. Kvarvarande observation: körning 1 (67 s efter start, v0.1, /tmp) är det ENDA fallet där writeScore exekverat en writer.
+
+## Nästa steg (påbörjat, avbröts vid dagens slut)
+
+1. ** Hämta tskovlund/mcp-scores plugin-källkod** (src/mcp_score/musescore + bridge, GitHub): deras live-plugin-CI är grön på 4.7.5 — deras sätt att få ut partiturdata (writeScore? readScore? helt annat?) är den snabbaste vägen till ett fungerande mönster. Web-hämtningen av deras katalogstruktur påbörjades men avbröts.
+2. Om writeScore förblir trasigt — plan B (redan identifierad i F5/F11): music21-ström byggs server-side ur getScoreSummary-JSON (förlustig men genomförbar), och runCode-backup ersätts med server-side JSON-snapshot före/efter (faktiskt bättre för diff).
 
 ## Slutsatser för implementationen (efter körning 1-3)
 
