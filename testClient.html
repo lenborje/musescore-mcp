@@ -56,22 +56,58 @@
     </div>
     
     <div class="category">
-        <div class="category-title">Notes & Measures</div>
+        <div class="category-title">Time & Tempo</div>
+        <button onclick="setTimeSignature()">Set Time Signature</button>
+    </div>
+
+    <div class="category">
+        <div class="category-title">Voices</div>
+        <button onclick="getVoices()">Get Voices</button>
+        <br>
+        <button onclick="swapVoices()">Swap Voices</button>
+        <select id="swap-voice-1">
+            <option value="0" selected>Voice 1</option>
+            <option value="1">Voice 2</option>
+            <option value="2">Voice 3</option>
+            <option value="3">Voice 4</option>
+        </select>
+        &harr;
+        <select id="swap-voice-2">
+            <option value="0">Voice 1</option>
+            <option value="1" selected>Voice 2</option>
+            <option value="2">Voice 3</option>
+            <option value="3">Voice 4</option>
+        </select>
+        <br>
+        <button onclick="setVoiceVisibility(false)">Hide</button>
+        <button onclick="setVoiceVisibility(true)">Show</button>
+        <select id="visibility-voice">
+            <option value="0">Voice 1</option>
+            <option value="1" selected>Voice 2</option>
+            <option value="2">Voice 3</option>
+            <option value="3">Voice 4</option>
+        </select>
+        on staff 0
+    </div>
+
+    <div class="category">
+        <div class="category-title">Notes &amp; Measures</div>
         <button onclick="addNote()">Add Note at Current Position</button>
         <button onclick="addRest()">Add Rest at Current Position</button>
         <button onclick="addTuplet()">Add Tuplet</button>
         <button onclick="insertMeasure()">Insert Measure</button>
         <button onclick="appendMeasure()">Append Measure</button>
         <button onclick="deleteSelection()">Delete Selection</button>
-    </div>
-    
-  
-    <div class="category">
-        <div class="category-title">Time & Tempo</div>
-        <button onclick="setTimeSignature()">Set Time Signature</button>
+        <br>
+        Add notes in:
+        <select id="voice-select">
+            <option value="0" selected>Voice 1</option>
+            <option value="1">Voice 2</option>
+            <option value="2">Voice 3</option>
+            <option value="3">Voice 4</option>
+        </select>
     </div>
 
-    
     <h3>Custom Command:</h3>
     <textarea id="command">{
   "action": "goToMeasure",
@@ -285,7 +321,8 @@
                     numerator: 1,
                     denominator: 4
                 },
-                advanceCursorAfterAction: true
+                advanceCursorAfterAction: true,
+                voice: Number(document.getElementById('voice-select').value)
             });
         }
         
@@ -330,6 +367,29 @@
             sendCommand('setTimeSignature', {
                 numerator: 3,
                 denominator: 4
+            });
+        }
+
+
+        // Voice Functions
+        function getVoices() {
+            sendCommand('getVoices');
+        }
+
+        function swapVoices() {
+            const v1 = Number(document.getElementById('swap-voice-1').value);
+            const v2 = Number(document.getElementById('swap-voice-2').value);
+            sendCommand('swapVoices', {
+                voice1: v1,
+                voice2: v2
+            });
+        }
+
+        function setVoiceVisibility(visible) {
+            sendCommand('setVoiceVisibility', {
+                staff: 0,
+                voice: Number(document.getElementById('visibility-voice').value),
+                visible: visible
             });
         }
         

@@ -3,7 +3,7 @@ import websockets
 import json
 import sys
 import logging
-from typing import Dict, Any, Optional, List, Literal, TypedDict
+from typing import Dict, Any, Optional, List, Literal, NotRequired, TypedDict
 
 # Set up logging
 logging.basicConfig(
@@ -190,6 +190,7 @@ class MuseScoreMCP:
             pitch: int
             duration: Dict[Literal["numerator", "denominator"], int]
             advanceCursorAfterAction: bool
+            voice: NotRequired[int]
 
         class addNoteAction(TypedDict):
             action: Literal["addNote"]
@@ -198,6 +199,7 @@ class MuseScoreMCP:
         class addRestParams(TypedDict):
             duration: Dict[Literal["numerator", "denominator"], int]
             advanceCursorAfterAction: bool
+            voice: NotRequired[int]
 
         class addRestAction(TypedDict):
             action: Literal["addRest"]
@@ -207,6 +209,7 @@ class MuseScoreMCP:
             duration: Dict[Literal["numerator", "denominator"], int]
             ratio: Dict[Literal["numerator", "denominator"], int]
             advanceCursorAfterAction: bool
+            voice: NotRequired[int]
 
         class addTupletAction(TypedDict):
             action: Literal["addTuplet"]
@@ -226,6 +229,7 @@ class MuseScoreMCP:
 
         class goToMeasureParams(TypedDict):
             measure: int
+            voice: NotRequired[int]
 
         class goToMeasureAction(TypedDict):
             action: Literal["goToMeasure"]
@@ -275,8 +279,47 @@ class MuseScoreMCP:
             action: Literal["prevStaff"]
             params: Dict[str, Any]
 
-        
-        type ActionSequence = List[getScoreAction | getScoreMetadataAction | addNoteAction | addRestAction | addTupletAction | appendMeasureAction | deleteSelectionAction | getCursorInfoAction | goToMeasureAction | nextElementAction | prevElementAction | selectCurrentMeasureAction | insertMeasureAction | goToFinalMeasureAction | goToBeginningOfScoreAction | setTimeSignatureAction | undoAction | nextStaffAction | prevStaffAction]
+        class getVoicesParams(TypedDict, total=False):
+            startStaff: int
+            endStaff: int
+            startTick: int
+            endTick: int
+
+        class getVoicesAction(TypedDict):
+            action: Literal["getVoices"]
+            params: getVoicesParams
+
+        class swapVoicesParams(TypedDict, total=False):
+            voice1: int
+            voice2: int
+            measure: int
+            startStaff: int
+            endStaff: int
+            startTick: int
+            endTick: int
+
+        class swapVoicesAction(TypedDict):
+            action: Literal["swapVoices"]
+            params: swapVoicesParams
+
+        class setVoiceVisibilityParams(TypedDict):
+            staff: int
+            voice: int
+            visible: bool
+
+        class setVoiceVisibilityAction(TypedDict):
+            action: Literal["setVoiceVisibility"]
+            params: setVoiceVisibilityParams
+
+        class exportScoreParams(TypedDict):
+            path: str
+            format: Literal["musicxml", "mscz"]
+
+        class exportScoreAction(TypedDict):
+            action: Literal["exportScore"]
+            params: exportScoreParams
+
+        type ActionSequence = List[getScoreAction | getScoreMetadataAction | addNoteAction | addRestAction | addTupletAction | appendMeasureAction | deleteSelectionAction | getCursorInfoAction | goToMeasureAction | nextElementAction | prevElementAction | selectCurrentMeasureAction | insertMeasureAction | goToFinalMeasureAction | goToBeginningOfScoreAction | setTimeSignatureAction | undoAction | nextStaffAction | prevStaffAction | getVoicesAction | swapVoicesAction | setVoiceVisibilityAction | exportScoreAction]
 
         @self.mcp.tool()
         async def processSequence(sequence: ActionSequence):

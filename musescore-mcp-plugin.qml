@@ -9,6 +9,8 @@ MuseScore {
     version: "1.0"
 
     property var clientConnections: []
+    property int currentVoice: 0
+    property string swapCodePrefix: ""
     
     // Global state to track selection position
     property var selectionState: ({
@@ -23,6 +25,7 @@ MuseScore {
         try {
             var command = JSON.parse(message);
             var result = processCommand(command);
+            ensureVoiceInSelectionState();
             api.websocketserver.send(clientId, JSON.stringify({
                 status: "success",
                 result: result
@@ -64,7 +67,10 @@ MuseScore {
             "insertMeasure",
             "goToFinalMeasure",
             "goToBeginningOfScore",
-            "setTimeSignature"
+            "setTimeSignature",
+            "getVoices",
+            "swapVoices",
+            "setVoiceVisibility"
         ]
 
         try {
@@ -84,8 +90,10 @@ MuseScore {
                 scoreSummary = { error: "Score summary failed: " + sse.toString() };
             }
 
+            ensureVoiceInSelectionState();
             return { success: true, message: "Sequence processed", currentSelection: selectionState, currentScore: scoreSummary };
         } catch (e) {
+            ensureVoiceInSelectionState();
             return { error: e.toString(), currentSelection: selectionState };
         }
     }
@@ -98,6 +106,12 @@ MuseScore {
                 return getScore(command.params);
             case "getScoreMetadata":
                 return getScoreMetadata(command.params);
+            case "getVoices":
+                return getVoices(command.params);
+            case "swapVoices":
+                return swapVoices(command.params);
+            case "setVoiceVisibility":
+                return setVoiceVisibility(command.params);
             case "syncStateToSelection":
                 return syncStateToSelection();
                 
@@ -210,6 +224,9 @@ MuseScore {
         }
         if (params.voice !== undefined) {
             cursor.voice = params.voice;
+            root.currentVoice = params.voice;
+        } else {
+            cursor.voice = root.currentVoice;
         }
         
         // Position the cursor
@@ -449,6 +466,8 @@ MuseScore {
 
         if (name == "Note") {
             processedElement = {
+                voice: (element.voice !== undefined ? element.voice : null),
+                staffIdx: (element.staffIdx !== undefined ? element.staffIdx : null),
                 name: element.name,
                 subtype: element.subtype,
                 subtypeName: element.subtypeName,
@@ -474,6 +493,8 @@ MuseScore {
 
         else if (name == "Rest") {
             processedElement = {
+                voice: (element.voice !== undefined ? element.voice : null),
+                staffIdx: (element.staffIdx !== undefined ? element.staffIdx : null),
                 name: element.name,
                 subtype: element.subtype,
                 subtypeName: element.subtypeName,
@@ -492,6 +513,8 @@ MuseScore {
 
         else if (name == "Chord") {
             processedElement = {
+                voice: (element.voice !== undefined ? element.voice : null),
+                staffIdx: (element.staffIdx !== undefined ? element.staffIdx : null),
                 name: element.name,
                 subtype: element.subtype,
                 subtypeName: element.subtypeName,
@@ -620,7 +643,250 @@ MuseScore {
             return { error: e.toString() };
         }
     }
-    
+
+    // Ensure selectionState carries the current voice in every response
+    function ensureVoiceInSelectionState() {
+        if (selectionState && selectionState.voice === undefined) {
+            selectionState.voice = root.currentVoice;
+        }
+    }
+
+    // Measure start ticks (0-based index)
+    function measureBoundaries() {
+        var boundaries = [];
+        var cursor = curScore.newCursor();
+        cursor.inputStateMode = Cursor.INPUT_STATE_INDEPENDENT;
+        cursor.rewind(0);
+        for (var i = 0; i < curScore.nmeasures; i++) {
+            boundaries.push(cursor.tick);
+            if (!cursor.nextMeasure()) break;
+        }
+        return boundaries;
+    }
+
+    // End tick of a measure: next measure's start, or for the last measure
+    // the extent found by walking its elements
+    function measureEndTick(boundaries, mIdx) {
+        if (mIdx + 1 < boundaries.length) return boundaries[mIdx + 1];
+        var cursor = curScore.newCursor();
+        cursor.inputStateMode = Cursor.INPUT_STATE_INDEPENDENT;
+        cursor.rewind(0);
+        for (var i = 0; i < mIdx; i++) {
+            if (!cursor.nextMeasure()) break;
+        }
+        var end = cursor.tick;
+        while (true) {
+            var e = cursor.element;
+            if (e) {
+                var d = 0;
+                try { d = e.actualDuration.ticks; } catch (de) { d = 0; }
+                end = Math.max(end, cursor.tick + d);
+            }
+            if (!cursor.next()) break;
+        }
+        return (end > boundaries[mIdx]) ? end : boundaries[mIdx] + 1920;
+    }
+
+    function measureIndexForTick(boundaries, tick) {
+        var idx = -1;
+        for (var i = 0; i < boundaries.length; i++) {
+            if (boundaries[i] <= tick) idx = i;
+            else break;
+        }
+        return idx;
+    }
+
+    // Voice census per staff: which voices carry content and where
+    function getVoices(params) {
+        if (!curScore) return { error: "No score open" };
+        if (!params) params = {};
+
+        try {
+            var startStaff = (params.startStaff !== undefined) ? params.startStaff : 0;
+            var endStaff = (params.endStaff !== undefined) ? params.endStaff : curScore.nstaves - 1;
+            var boundaries = measureBoundaries();
+            var cursor = curScore.newCursor();
+            cursor.inputStateMode = Cursor.INPUT_STATE_INDEPENDENT;
+            var staves = [];
+
+            for (var s = startStaff; s <= endStaff && s < curScore.nstaves; s++) {
+                var voices = [];
+                for (var v = 0; v < 4; v++) {
+                    cursor.rewind(0);
+                    cursor.staffIdx = s;
+                    cursor.voice = v;
+                    var count = 0, firstMeasure = null, lastMeasure = null;
+                    while (true) {
+                        var e = cursor.element;
+                        if (e && (e.name === "Note" || e.name === "Chord" || e.name === "Rest")) {
+                            count++;
+                            var mIdx = measureIndexForTick(boundaries, cursor.tick);
+                            if (mIdx >= 0) {
+                                if (firstMeasure === null) firstMeasure = mIdx + 1;
+                                lastMeasure = mIdx + 1;
+                            }
+                        }
+                        if (!cursor.next()) break;
+                    }
+                    voices.push({
+                        voice: v,
+                        hasContent: count > 0,
+                        elementCount: count,
+                        firstMeasure: firstMeasure,
+                        lastMeasure: lastMeasure
+                    });
+                }
+                staves.push({ staff: s, voices: voices });
+            }
+
+            return { success: true, staves: staves, currentVoice: root.currentVoice };
+        } catch (e) {
+            return { error: e.toString() };
+        }
+    }
+
+    // Pitched content snapshot in a voice within a tick range (swap verification)
+    function voiceRangeSnapshot(staff, voice, startTick, endTick) {
+        var cursor = curScore.newCursor();
+        cursor.inputStateMode = Cursor.INPUT_STATE_INDEPENDENT;
+        cursor.rewind(0);
+        cursor.staffIdx = staff;
+        cursor.voice = voice;
+        var count = 0, firstPitch = null;
+        while (true) {
+            if (cursor.tick >= endTick) break;
+            var e = cursor.element;
+            if (e && (e.name === "Note" || e.name === "Chord")) {
+                count++;
+                if (firstPitch === null) {
+                    try {
+                        firstPitch = (e.name === "Note") ? e.pitch : e.notes[0].pitch;
+                    } catch (pe) { firstPitch = -1; }
+                }
+            }
+            if (!cursor.next()) break;
+        }
+        return { count: count, firstPitch: firstPitch };
+    }
+
+    // Swap (exchange) the content of two voices in a range using MuseScore's
+    // own voice-exchange command via cmd(). Try-list of command codes across
+    // MuseScore versions; the first working prefix is cached in swapCodePrefix.
+    function swapVoices(params) {
+        if (!curScore) return { error: "No score open" };
+        if (!params) params = {};
+        if (params.voice1 === undefined || params.voice2 === undefined) {
+            return { error: "voice1 and voice2 are required (0-3)" };
+        }
+        var v1 = params.voice1, v2 = params.voice2;
+        if (v1 < 0 || v1 > 3 || v2 < 0 || v2 > 3 || v1 === v2) {
+            return { error: "voice1 and voice2 must be two different values in 0-3" };
+        }
+        var lo = Math.min(v1, v2), hi = Math.max(v1, v2);
+
+        try {
+            var boundaries = measureBoundaries();
+            var startStaff = (params.startStaff !== undefined) ? params.startStaff : selectionState.startStaff;
+            var endStaff = (params.endStaff !== undefined) ? params.endStaff : Math.max(startStaff + 1, selectionState.endStaff);
+            var startTick, endTick, mIdx;
+
+            if (params.measure !== undefined) {
+                mIdx = params.measure - 1;
+                if (mIdx < 0 || mIdx >= boundaries.length) return { error: "measure out of range" };
+                startTick = boundaries[mIdx];
+                endTick = measureEndTick(boundaries, mIdx);
+            } else if (params.startTick !== undefined && params.endTick !== undefined) {
+                startTick = params.startTick;
+                endTick = params.endTick;
+            } else {
+                mIdx = measureIndexForTick(boundaries, selectionState.startTick);
+                if (mIdx < 0) mIdx = 0;
+                startTick = boundaries[mIdx];
+                endTick = measureEndTick(boundaries, mIdx);
+            }
+
+            var before1 = voiceRangeSnapshot(startStaff, v1, startTick, endTick);
+            var before2 = voiceRangeSnapshot(startStaff, v2, startTick, endTick);
+            var before = JSON.stringify([before1, before2]);
+
+            var tail = (lo + 1) + "" + (hi + 1);
+            var codes = [];
+            if (root.swapCodePrefix) codes.push(root.swapCodePrefix + tail);
+            var candidates = ["voice-x", "command://notation/swap-voice-x", "swap-voice-x"];
+            for (var ci = 0; ci < candidates.length; ci++) {
+                var c = candidates[ci] + tail;
+                if (codes.indexOf(c) === -1) codes.push(c);
+            }
+
+            var swappedVia = null;
+            for (var i = 0; i < codes.length; i++) {
+                try {
+                    curScore.startCmd();
+                    curScore.selection.clear();
+                    curScore.selection.selectRange(startTick, endTick, startStaff, endStaff);
+                    cmd(codes[i]);
+                    curScore.endCmd();
+                } catch (ce) {
+                    if (curScore) curScore.endCmd(true);
+                    console.log("swapVoices: code '" + codes[i] + "' threw: " + ce.toString());
+                    continue;
+                }
+                var after1 = voiceRangeSnapshot(startStaff, v1, startTick, endTick);
+                var after2 = voiceRangeSnapshot(startStaff, v2, startTick, endTick);
+                var changed = (JSON.stringify([after1, after2]) !== before);
+                if (changed || (before1.count === 0 && before2.count === 0)) {
+                    swappedVia = codes[i];
+                    if (changed) {
+                        root.swapCodePrefix = codes[i].substring(0, codes[i].lastIndexOf("x") + 1);
+                    }
+                    break;
+                }
+            }
+
+            if (!swappedVia) {
+                return { error: "voice swap failed, no working command code (tried: " + codes.join(", ") + ")" };
+            }
+
+            syncStateToSelection();
+            return {
+                success: true,
+                swappedVia: swappedVia,
+                voice1: v1,
+                voice2: v2,
+                startStaff: startStaff,
+                endStaff: endStaff,
+                startTick: startTick,
+                endTick: endTick,
+                currentSelection: selectionState,
+                currentScore: getScoreSummary()
+            };
+        } catch (e) {
+            if (curScore) curScore.endCmd(true);
+            return { error: e.toString() };
+        }
+    }
+
+    // Per-staff, per-voice visibility
+    function setVoiceVisibility(params) {
+        if (!curScore) return { error: "No score open" };
+        if (!params) params = {};
+        if (params.staff === undefined || params.voice === undefined || params.visible === undefined) {
+            return { error: "staff, voice and visible are required" };
+        }
+        if (params.voice < 0 || params.voice > 3) return { error: "voice must be 0-3" };
+        if (params.staff < 0 || params.staff >= curScore.nstaves) return { error: "staff out of range" };
+
+        try {
+            curScore.startCmd();
+            var ok = curScore.setVoiceVisible(curScore.staves[params.staff], params.voice, params.visible);
+            curScore.endCmd();
+            return { success: true, applied: ok, staff: params.staff, voice: params.voice, visible: params.visible };
+        } catch (e) {
+            if (curScore) curScore.endCmd(true);
+            return { error: e.toString() };
+        }
+    }
+
     // Set cursor position with unified feedback
     function goToMeasure(params) {
         if (!curScore) return { error: "No score open" };
@@ -1507,11 +1773,15 @@ MuseScore {
 
             for (var k = 0; k < curScore.nstaves; k++) {
 
+                // walk all four voices of this staff
+                for (var v = 0; v < 4; v++) {
+
                 // rewind cursor to beginning of selection
                 cursor.rewind(0);
 
-                // go to relevant staff
+                // go to relevant staff and voice
                 cursor.staffIdx = k;
+                cursor.voice = v;
 
                 // walk through the elements
 
@@ -1545,10 +1815,13 @@ MuseScore {
                     if (!cursor.next()) break;
                 }
 
+                }
+
             }
 
             // Reset cursor state
             cursor.staffIdx = tempSelectionState.startStaff;
+            cursor.voice = root.currentVoice;
             cursor.rewindToTick(tempSelectionState.startTick);
             curScore.selection.select(cursor.element);
     
