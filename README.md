@@ -14,10 +14,35 @@ The server allows an MCP-connected LLM to:
 - Create tuplets
 - Undo a change
 - Move from staff to staff
+- Work with multiple voices per staff: read a voice census, add notes in
+  any voice (1-4), swap (exchange) the content of two voices, and toggle
+  per-voice visibility
+- Ask general music theory questions (intervals, chords, scales) and run
+  key and harmonic analysis of the current score via music21
+- Execute whole JavaScript tasks inside the plugin (`run_qml`) for complex
+  operations that would otherwise need many round trips
+
+See `docs/ACTIONS.md` for the full action reference and
+`docs/AGENT-COOKBOOK.md` for writing `run_qml` code.
 
 ## Limitations
 
-- Can not understand multiple voices within a staff or navigate between them
+- Can not navigate between multiple voices within a staff interactively;
+  voices are addressed by parameter (index 0-3), not traversed
+- Voice swap depends on undocumented command codes (`voice-xNN` in
+  MuseScore 4.7.x) and is verified per version by `dev/verify-voices.qml`
+- `run_qml` is disabled by default: edit `musescore-mcp-plugin.qml`, set
+  `property allowEval: true`, and re-run the plugin. It executes arbitrary
+  code in-process on MuseScore's GUI thread (a .mscz backup is written to
+  /tmp before each run; infinite loops freeze MuseScore unrecoverably)
+
+## Development verification
+
+`dev/verify-voices.qml` is a one-shot verification plugin: open
+`dev/test-voices.mscz` in MuseScore and run Plugins > MCP Verify Voices to
+check voice-swap command codes, score export, eval support and the cursor
+voice API on the installed MuseScore version. Results go to MuseScore's
+plugin console; exports land in /tmp.
 
 ## Requirements
 

@@ -439,6 +439,27 @@ class MuseScoreMCP:
                 return {"error": f"music21 harmonic analysis failed: {e}"}
 
         @self.mcp.tool()
+        async def run_qml(code: str, params: Optional[Dict[str, Any]] = None):
+            """Execute QML/JavaScript code inside the MuseScore plugin and return its result.
+
+            For complex score tasks that would otherwise need many round trips.
+            The code is a function body, run as function(ctx, params, state):
+            - ctx: plugin API facade - ctx.score (current Score), ctx.newCursor(),
+              ctx.processCommand({action, params}), ctx.processElement(element),
+              ctx.getScoreSummary(), ctx.getVoices(params), ctx.log(msg)
+            - params: the params object of this call (yours to shape)
+            - state: object persisting across run_qml calls (for multi-step work;
+              mutate it, do not reassign it)
+            The return value must be JSON-serializable. Each run is one undo
+            step (errors roll back) and a .mscz backup is written to /tmp first.
+            The code runs on MuseScore's GUI thread - an infinite loop freezes
+            MuseScore unrecoverably. See docs/AGENT-COOKBOOK.md for patterns
+            and known pitfalls. Requires the plugin property allowEval: true;
+            otherwise returns an error explaining how to enable it.
+            """
+            return await self.client.send_command("runCode", {"code": code, "params": params or {}})
+
+        @self.mcp.tool()
         async def music_theory_query(
             query_type: Literal["interval", "chord", "scale"],
             pitch_from: Optional[str] = None,

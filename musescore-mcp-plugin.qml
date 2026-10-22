@@ -11,6 +11,9 @@ MuseScore {
     property var clientConnections: []
     property int currentVoice: 0
     property string swapCodePrefix: ""
+    property bool allowEval: false
+    property var codeState: ({})
+    property int runCounter: 0
     
     // Global state to track selection position
     property var selectionState: ({
@@ -115,6 +118,8 @@ MuseScore {
                 return setVoiceVisibility(command.params);
             case "exportScore":
                 return exportScore(command.params);
+            case "runCode":
+                return runCode(command.params);
             case "syncStateToSelection":
                 return syncStateToSelection();
                 
@@ -888,6 +893,76 @@ MuseScore {
         }
     }
 
+    // Context facade handed to agent code executed by runCode
+    function makeRunContext(consoleLines) {
+        return {
+            score: curScore,
+            newCursor: function() { return curScore.newCursor(); },
+            processCommand: function(command) { return processCommand(command); },
+            processElement: function(element) { return processElement(element); },
+            getScoreSummary: function() { return getScoreSummary(); },
+            getVoices: function(p) { return getVoices(p || {}); },
+            log: function() {
+                var parts = [];
+                for (var i = 0; i < arguments.length; i++) parts.push(String(arguments[i]));
+                consoleLines.push(parts.join(" "));
+            }
+        };
+    }
+
+    // Execute agent-provided JavaScript in the plugin (opt-in via allowEval).
+    // Contract: code is a function body run as fn(ctx, params, state); the
+    // return value must be JSON-serializable; the run is wrapped in one
+    // startCmd/endCmd (single undo step, rollback on error); a .mscz backup
+    // is written to /tmp before each run. state persists across runs.
+    function runCode(params) {
+        if (!curScore) return { error: "No score open" };
+        if (!root.allowEval) {
+            return { error: "runCode is disabled: set property allowEval: true in musescore-mcp-plugin.qml and restart the plugin to enable it" };
+        }
+        if (!params || !params.code) return { error: "code is required" };
+        if (params.code.length > 100000) return { error: "code exceeds the 100 kB limit" };
+
+        console.log("runCode: start, codeLength=" + params.code.length
+            + ", paramKeys=" + (params.params ? Object.keys(params.params).length : 0));
+
+        var backupPath = "/tmp/musescore-mcp-runbackup-" + root.runCounter + ".mscz";
+        try {
+            writeScore(curScore, "/tmp/musescore-mcp-runbackup-" + root.runCounter, "mscz");
+        } catch (be) {
+            console.log("runCode: backup write failed: " + be.toString());
+            return { error: "backup write failed, aborting: " + be.toString() };
+        }
+        root.runCounter++;
+
+        var consoleLines = [];
+        var ctx = makeRunContext(consoleLines);
+
+        curScore.startCmd();
+        var result;
+        try {
+            var fn = eval("(function(ctx, params, state) {\n" + params.code + "\n})");
+            if (typeof fn !== "function") {
+                throw new Error("code must be a function body, got " + (typeof fn));
+            }
+            result = fn(ctx, (params.params !== undefined ? params.params : {}), root.codeState);
+        } catch (e) {
+            curScore.endCmd(true);
+            console.log("runCode: error, rolled back: " + e.toString());
+            return { status: "error", error: e.toString(), consoleLog: consoleLines, backup: backupPath };
+        }
+        curScore.endCmd();
+
+        try {
+            JSON.stringify(result);
+        } catch (se) {
+            return { status: "error", error: "return value is not JSON-serializable: " + se.toString(), consoleLog: consoleLines, backup: backupPath };
+        }
+
+        console.log("runCode: done, ok");
+        return { status: "success", result: result, consoleLog: consoleLines, backup: backupPath };
+    }
+
     // Per-staff, per-voice visibility
     function setVoiceVisibility(params) {
         if (!curScore) return { error: "No score open" };
@@ -1233,18 +1308,22 @@ MuseScore {
             return { error: "Pitch and duration must be specified. Pitch must be specified as a midi pitch value. Duration must be specified as { numerator: int, denominator: int }. advanceCursorAfterAction must be true or false" };
         }
 
+        if (params.voice !== undefined) {
+            root.currentVoice = params.voice;
+        }
+
         // Start command for undo
         curScore.startCmd();
-        
+
         try {
             // sync state to selection
             syncStateToSelection();
 
-            // Create cursor  
+            // Create cursor
             var cursor = createCursor();
 
             cursor.setDuration(params.duration.numerator, params.duration.denominator);
-            
+
             // Add the note
             if (params.pitch !== undefined) {
 
@@ -1310,6 +1389,10 @@ MuseScore {
             return { error: "Duration must be specified as { numerator: int, denominator: int }. advanceCursorAfterAction must be true or false" };
         }
 
+        if (params.voice !== undefined) {
+            root.currentVoice = params.voice;
+        }
+
         // Start command for undo
         curScore.startCmd();
         
@@ -1371,7 +1454,11 @@ MuseScore {
         if (!params.ratio || !params.duration || !params.duration.numerator || !params.duration.denominator || !params.ratio.numerator || !params.ratio.denominator || !Object.keys(params).includes("advanceCursorAfterAction")) {
             return { error: "Ratio and duration must be specified in the form { numerator: int, denominator: int }. advanceCursorAfterAction must be true or false" };
         }
-        
+
+        if (params.voice !== undefined) {
+            root.currentVoice = params.voice;
+        }
+
         // Start command for undo
         curScore.startCmd();
         
