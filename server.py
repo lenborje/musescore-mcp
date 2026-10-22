@@ -451,7 +451,8 @@ class MuseScoreMCP:
             - state: object persisting across run_qml calls (for multi-step work;
               mutate it, do not reassign it)
             The return value must be JSON-serializable. Each run is one undo
-            step (errors roll back) and a .mscz backup is written to /tmp first.
+            step (errors roll back) and a musicxml backup of the score is
+            written to the allowed temp directory first.
             The code runs on MuseScore's GUI thread - an infinite loop freezes
             MuseScore unrecoverably. See docs/AGENT-COOKBOOK.md for patterns
             and known pitfalls. Requires the plugin property allowEval: true;

@@ -3,3 +3,5 @@ testscore.mscz
 .mscbackup
 venv/
 cenv/
+__pycache__/
+*.autosave

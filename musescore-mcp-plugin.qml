@@ -1,5 +1,6 @@
 import QtQuick 2.9
 import MuseScore 3.0
+import FileIO 3.0
 
 MuseScore {
     id: root
@@ -14,6 +15,8 @@ MuseScore {
     property bool allowEval: false
     property var codeState: ({})
     property int runCounter: 0
+
+    FileIO { id: fio }
     
     // Global state to track selection position
     property var selectionState: ({
@@ -200,10 +203,13 @@ MuseScore {
 
     function undo() {
         if (!curScore) return { error: "No score open" };
-        
+
         curScore.startCmd();
         try {
-            cmd("undo");
+            // MuseScore 4.7 registers undo as action://undo; the legacy
+            // "undo" code is not a registered action there (verified in
+            // phase 0 run 2, .ai/VERIFIERINGSRESULTAT.md).
+            cmd("action://undo");
             curScore.endCmd();
             return { success: true, message: "Undo successful", currentSelection: selectionState, currentScore: getScoreSummary() };
         } catch (e) {
@@ -913,8 +919,9 @@ MuseScore {
     // Execute agent-provided JavaScript in the plugin (opt-in via allowEval).
     // Contract: code is a function body run as fn(ctx, params, state); the
     // return value must be JSON-serializable; the run is wrapped in one
-    // startCmd/endCmd (single undo step, rollback on error); a .mscz backup
-    // is written to /tmp before each run. state persists across runs.
+    // startCmd/endCmd (single undo step, rollback on error); a musicxml
+    // backup is written to the allowed temp dir before each run. state
+    // persists across runs.
     function runCode(params) {
         if (!curScore) return { error: "No score open" };
         if (!root.allowEval) {
@@ -926,9 +933,13 @@ MuseScore {
         console.log("runCode: start, codeLength=" + params.code.length
             + ", paramKeys=" + (params.params ? Object.keys(params.params).length : 0));
 
-        var backupPath = "/tmp/musescore-mcp-runbackup-" + root.runCounter + ".mscz";
+        // Backup current score before executing foreign code. MuseScore
+        // only allows file writes inside specific directories (per-user
+        // temp and the MuseScore data dirs), and the mscz writer does not
+        // work from plugins - use the allowed temp dir and musicxml.
+        var backupPath = fio.tempPath() + "/musescore-mcp-runbackup-" + root.runCounter + ".musicxml";
         try {
-            writeScore(curScore, "/tmp/musescore-mcp-runbackup-" + root.runCounter, "mscz");
+            writeScore(curScore, fio.tempPath() + "/musescore-mcp-runbackup-" + root.runCounter, "musicxml");
         } catch (be) {
             console.log("runCode: backup write failed: " + be.toString());
             return { error: "backup write failed, aborting: " + be.toString() };

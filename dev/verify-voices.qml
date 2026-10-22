@@ -3,37 +3,38 @@ import MuseScore 3.0
 import FileIO 3.0
 
 // Phase 0 verification plugin (ARBETSPLAN.md, .ai/).
-// Purpose: establish runtime facts on the installed MuseScore (4.7.5) that
-// the voice/music21/run_qml implementation depends on:
 //   T1  eval() availability and the function-expression pattern used by runCode
 //   T2  Qt.createQmlObject availability
 //   T3  cmd() availability
 //   T4  cursor.voice readback per voice
-//   T5  Score.setVoiceVisible
-//   T6  writeScore export (musicxml, mscx, mscz)
-//   T7  voice swap via cmd() with candidate command codes (try-list)
+//   T5  Score.setVoiceVisible (return values, two voices)
+//   T6  writeScore export (musicxml, mscx, mscz) to an ALLOWED directory
+//   T7  voice swap via cmd() + undo action-code candidates
+//   T8  cmd("delete") candidates with undo restore
 //
-// Output: results are written to /tmp/mcp-verify-result.txt after every
-// test (FileIO), mirrored to console.log and to api.log.info when the
-// MuseApi.Log api is available. console.log alone is discarded by
-// MuseScore 4.7 when a plugin is run from the Plugins menu.
+// Output: /tmp (per-user, allowed) via io.tempPath(), mirrored to
+// console.log and api.log.info. Run 2 established that /tmp and blocked
+// file writes break things: all paths here are inside io.tempPath().
 //
 // SAFETY GATE: refuses to run unless the open score is dev/test-voices.mscz
 // (movementTitle "MCP verify test"). No other score is ever touched.
-//
-// Run: open dev/test-voices.mscz in MuseScore, then Plugins > MCP Verify Voices.
+// Run with the score freshly opened from file (unsaved state from a
+// previous verification run confuses the expectations).
 
 MuseScore {
     id: root
     menuPath: "Plugins.MCP Verify Voices"
     requiresScore: true
     description: "Phase 0 verification for MCP voice support"
-    version: "0.2"
+    version: "0.3"
 
     property var lines: []
-    property string resultPath: "/tmp/mcp-verify-result.txt"
 
     FileIO { id: io }
+
+    function resultPath() {
+        return io.tempPath() + "/mcp-verify-result.txt";
+    }
 
     function log(msg) {
         console.log("[MCP-VERIFY] " + msg);
@@ -44,9 +45,9 @@ MuseScore {
         } catch (le) { /* api.log unavailable */ }
         root.lines.push(msg);
         try {
-            io.source = root.resultPath;
+            io.source = root.resultPath();
             io.write(root.lines.join("\n") + "\n");
-        } catch (we) { /* FileIO write failure - console/api.log only */ }
+        } catch (we) { /* console/api.log only */ }
     }
 
     function isPitched(e) {
@@ -83,13 +84,22 @@ MuseScore {
 
     onRun: {
         root.lines = [];
-        log("=== Phase 0 verification starting ===");
+        log("=== Phase 0 verification v0.3 starting ===");
+        log("resultFile = " + root.resultPath());
 
         // Safety gate
         var title = curScore.metaTag("movementTitle");
         log("movementTitle = '" + title + "'");
         if (title !== "MCP verify test") {
             log("REFUSING: open dev/test-voices.mscz before running this plugin. No tests executed.");
+            return;
+        }
+
+        var p0 = pitchAtVoice(0);
+        var p1 = pitchAtVoice(1);
+        log("baseline: voice0 = " + p0 + ", voice1 = " + p1 + " (expect 60/64)");
+        if (p0 !== 60 || p1 !== 64) {
+            log("Score is not in file state (previous run left it modified?). Close WITHOUT saving and reopen dev/test-voices.mscz, then run again. Aborting.");
             return;
         }
 
@@ -117,7 +127,7 @@ MuseScore {
         // T3: cmd()
         log("T3 typeof cmd = " + (typeof cmd) + ", typeof root.cmd = " + (typeof root.cmd));
 
-        // T4: cursor.voice readback (expected voice0=60, voice1=64)
+        // T4: cursor.voice readback
         try {
             log("T4 pitchAtVoice(0) = " + pitchAtVoice(0) + " (expect 60)");
             log("T4 pitchAtVoice(1) = " + pitchAtVoice(1) + " (expect 64)");
@@ -125,68 +135,124 @@ MuseScore {
             log("T4 cursor.voice read FAILED: " + e.toString());
         }
 
-        // T5: setVoiceVisible (toggle off and back on, log return values)
+        // T5: setVoiceVisible return values on two voices
         try {
             curScore.startCmd();
-            var okOff = curScore.setVoiceVisible(curScore.staves[0], 1, false);
+            var okA = curScore.setVoiceVisible(curScore.staves[0], 1, false);
             curScore.endCmd();
-            log("T5 setVoiceVisible(staff0, voice1, false) = " + okOff);
+            log("T5 setVoiceVisible(staff0, voice1, false) = " + okA);
             curScore.startCmd();
-            var okOn = curScore.setVoiceVisible(curScore.staves[0], 1, true);
+            var okB = curScore.setVoiceVisible(curScore.staves[0], 1, true);
             curScore.endCmd();
-            log("T5 setVoiceVisible(staff0, voice1, true) = " + okOn);
+            log("T5 setVoiceVisible(staff0, voice1, true) = " + okB);
+            curScore.startCmd();
+            var okC = curScore.setVoiceVisible(curScore.staves[0], 2, false);
+            curScore.endCmd();
+            log("T5 setVoiceVisible(staff0, voice2, false) = " + okC);
+            curScore.startCmd();
+            var okD = curScore.setVoiceVisible(curScore.staves[0], 2, true);
+            curScore.endCmd();
+            log("T5 setVoiceVisible(staff0, voice2, true) = " + okD);
         } catch (e) {
             if (curScore) curScore.endCmd(true);
             log("T5 setVoiceVisible FAILED: " + e.toString());
         }
 
-        // T6: writeScore export (musicxml, mscx, mscz) to /tmp
+        // T6: writeScore export to the allowed temp dir
         var formats = ["musicxml", "mscx", "mscz"];
         for (var fi = 0; fi < formats.length; fi++) {
             var fmt = formats[fi];
             try {
-                var ok = writeScore(curScore, "/tmp/mcp-verify-export-" + fmt, fmt);
+                var ok = writeScore(curScore, io.tempPath() + "/mcp-verify-export-" + fmt, fmt);
                 log("T6 writeScore " + fmt + " = " + ok);
             } catch (e) {
                 log("T6 writeScore " + fmt + " FAILED: " + e.toString());
             }
         }
 
-        // T7: voice swap via cmd() try-list (selection = measure 1, staff 0)
-        var codes = ["voice-x12", "command://notation/swap-voice-x12", "swap-voice-x12"];
-        var swapped = false;
-        for (var i = 0; i < codes.length; i++) {
-            var code = codes[i];
+        // T7: voice swap + undo candidates
+        try {
+            curScore.startCmd();
+            curScore.selection.clear();
+            curScore.selection.selectRange(0, 1920, 0, 1);
+            cmd("voice-x12");
+            curScore.endCmd();
+        } catch (e) {
+            if (curScore) curScore.endCmd(true);
+            log("T7 swap threw: " + e.toString());
+        }
+        var s0 = pitchAtVoice(0);
+        var s1 = pitchAtVoice(1);
+        log("T7 after swap voice-x12: voice0 = " + s0 + ", voice1 = " + s1);
+        if (s0 === 64 && s1 === 60) {
+            log("T7 SWAP OK via code: voice-x12");
+        } else {
+            log("T7 swap did not happen");
+        }
+
+        var undoCodes = ["action://undo", "action://notation/undo", "undo"];
+        var undoOk = null;
+        for (var ui = 0; ui < undoCodes.length; ui++) {
+            try {
+                cmd(undoCodes[ui]);
+            } catch (ue) {
+                log("T7 undo candidate '" + undoCodes[ui] + "' threw: " + ue.toString());
+                continue;
+            }
+            var r0 = pitchAtVoice(0);
+            var r1 = pitchAtVoice(1);
+            log("T7 after undo '" + undoCodes[ui] + "': voice0 = " + r0 + ", voice1 = " + r1);
+            if (r0 === 60 && r1 === 64) {
+                undoOk = undoCodes[ui];
+                log("T7 UNDO OK via code: " + undoOk);
+                break;
+            }
+        }
+
+        // Restore by re-swapping if no undo candidate worked
+        if (s0 === 64 && s1 === 60 && !undoOk) {
             try {
                 curScore.startCmd();
                 curScore.selection.clear();
                 curScore.selection.selectRange(0, 1920, 0, 1);
-                cmd(code);
+                cmd("voice-x12");
                 curScore.endCmd();
             } catch (e) {
                 if (curScore) curScore.endCmd(true);
-                log("T7 code '" + code + "' threw: " + e.toString());
             }
-            var p0 = pitchAtVoice(0);
-            var p1 = pitchAtVoice(1);
-            log("T7 after '" + code + "': voice0 = " + p0 + ", voice1 = " + p1);
-            if (p0 === 64 && p1 === 60) {
-                log("T7 SWAP OK via code: " + code);
-                swapped = true;
-                break;
-            }
+            log("T7 restore via re-swap: voice0 = " + pitchAtVoice(0) + ", voice1 = " + pitchAtVoice(1));
         }
-        if (!swapped) log("T7 no candidate code produced a swap");
 
-        // Cleanup: undo the swap if it happened (test score only)
-        if (swapped) {
-            cmd("undo");
-            var u0 = pitchAtVoice(0);
-            var u1 = pitchAtVoice(1);
-            log("T7 after undo: voice0 = " + u0 + ", voice1 = " + u1 + " (expect 60/64)");
-            if (u0 !== 60 || u1 !== 64) {
-                cmd("undo");
-                log("T7 after second undo: voice0 = " + pitchAtVoice(0) + ", voice1 = " + pitchAtVoice(1));
+        // T8: delete action candidates (restored with undo afterwards)
+        if (undoOk) {
+            var delCodes = ["action://delete", "delete"];
+            var deleted = false;
+            for (var di = 0; di < delCodes.length; di++) {
+                try {
+                    curScore.startCmd();
+                    curScore.selection.clear();
+                    curScore.selection.selectRange(0, 1920, 0, 1);
+                    cmd(delCodes[di]);
+                    curScore.endCmd();
+                } catch (e) {
+                    if (curScore) curScore.endCmd(true);
+                    log("T8 delete candidate '" + delCodes[di] + "' threw: " + e.toString());
+                    continue;
+                }
+                var d0 = pitchAtVoice(0);
+                log("T8 after delete '" + delCodes[di] + "': voice0 = " + d0);
+                if (d0 !== 60) {
+                    deleted = true;
+                    log("T8 DELETE OK via code: " + delCodes[di]);
+                    break;
+                }
+            }
+            if (!deleted) log("T8 no delete candidate worked");
+
+            // restore
+            if (deleted) {
+                cmd(undoOk);
+                log("T8 after undo restore: voice0 = " + pitchAtVoice(0) + ", voice1 = " + pitchAtVoice(1) + " (expect 60/64)");
             }
         }
 
