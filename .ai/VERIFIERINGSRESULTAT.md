@@ -27,10 +27,26 @@ Pluginet körde (dispatchad som `action://extensions/v1/verify-voices.qml?action
 | V12 | **T7 röstväxling fungerar via `cmd("voice-x12")`** — primära try-listkoden bekräftad; växlingen verkställd (voice0=64, voice1=60). | Fas 1:s swapVoices-design fungerar på 4.7.5. |
 | V13 | **`cmd("undo")` är en no-op**: `ActionsDispatcher::dispatch | not a registered action: undo`. Main-pluginets `undo()` har alltså varit tyst trasigt på 4.7.5. Binären har `action://undo` och `action://delete` som action-URI:er. | `undo()` ändrad till `cmd("action://undo")` (bekräftas i körning 3); `deleteSelection` avvaktar T8. |
 
-## Öppna frågor inför körning 3 (plugin v0.3)
+## Körning 3 — 2026-10-22 16:25 (plugin v0.3, komplett utdata via api.log)
 
-1. T6: fungerar writeScore (musicxml/mscx/mscz) till tillåten temp-katalog? Avgör runCode-backupens slutgiltiga format (musicxml påkallat nu, mscx möjligt bättre).
-2. T7: vilken undo-kod fungerar (`action://undo` förväntas)?
-3. T8: fungerar `action://delete` (eller ärvda `delete`)?
+| # | Faktum | Konsekvens |
+|---|---|---|
+| V14 | **T7: `action://undo` fungerar** — växlingen ångrades korrekt (60/64 återställda). Ärvda `undo` förblev no-op. | Main-pluginets `undo()`-fix (`cmd("action://undo")`) bekräftad korrekt. |
+| V15 | **T7: swap via `voice-x12` bekräftad igen** (andra körningen). | swapVoices stabil på 4.7.5. |
+| V16 | **T6: writeScore misslyckades även i tillåten temp-katalog** — rotorsaken synlig i loggen: macOS kanoniserar `/var/folders/...` till `/private/var/folders/...`, som inte matchar tillåtelselisten. Dessutom lyckades den **första** FileIO-skrivningen och blockerades sedan — och körning 1 (inget FileIO) kunde skriva till `/tmp` som inte ens är i listan. Slutsats: FileIO-skrivningar förgiftar sessionen; writeScore själv kontrollerar sökvägen bara i förgiftat tillstånd. | **FileIO avlägsnats ur alla plugin.** Export/backup sker nu till `~/Documents/MuseScore4` (riktig sökväg utan symlänkar, i tillåtelselisten), angiven av servern (`MUSESCORE_MCP_DATA_DIR`). |
+| V17 | **T8: båda delete-koderna dispatchar men `Score::deleteRange` assertar** (edit.cpp:3970, "s1") — raderingen avbröts, inget togs bort, MuseScore kraschade inte. `action://delete` är registrerad; problemet är rå `selectRange` vs notationens selection-tillstånd. | `deleteSelection` omskriven till ärlig verifiering (jämför elementantal före/efter, rapporterar `deleted: true/false`). Känd begränsning dokumenterad i ACTIONS.md. |
 
-Obs: körning 2 lämnade testpartituret växlat (undo var no-op). Körning 3 ska göras med partituret nyöppnat från fil.
+## Körning 4 (plugin v0.4, avvaktar)
+
+Slimmad regressionssvit utan FileIO — avgör:
+1. T6: fungerar writeScore (musicxml/mscx/mscz) till `~/Documents/MuseScore4` i oförgiftat tillstånd? (Avgör runCode-backupens slutgiltiga hållbarhet; musicxml är oavsett fungerande i körning 1.)
+2. T7-regression: swap + action://undo.
+
+## Slutsatser för implementationen (efter körning 1-3)
+
+- Röster: fullt fungerande (cursor.voice, element.voice, swap via `voice-x12`, `action://undo`).
+- run_qml: eval bevisat fungerande; kontraktet håller.
+- Filskrivningar: enbart via `writeScore` till `~/Documents/MuseScore4`; ingen FileIO i plugin; mscz-writer trasig från plugin (0-byte + "MscNotationWriter::writeList Not supported"), musicxml fungerar.
+- `setVoiceVisible`: returvärde falskt men anropet kastar inte — rapportera `success: true` utan att lita på returen.
+- `deleteSelection`: ärlig verifiering; radering via cmd opålitlig på 4.7.x.
+- Opt-in (`allowEval`), try-lista för swap-koder och `action://`-koder: implementerade enligt ovan.

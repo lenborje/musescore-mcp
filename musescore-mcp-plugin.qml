@@ -1,6 +1,5 @@
 import QtQuick 2.9
 import MuseScore 3.0
-import FileIO 3.0
 
 MuseScore {
     id: root
@@ -15,8 +14,6 @@ MuseScore {
     property bool allowEval: false
     property var codeState: ({})
     property int runCounter: 0
-
-    FileIO { id: fio }
     
     // Global state to track selection position
     property var selectionState: ({
@@ -933,13 +930,16 @@ MuseScore {
         console.log("runCode: start, codeLength=" + params.code.length
             + ", paramKeys=" + (params.params ? Object.keys(params.params).length : 0));
 
-        // Backup current score before executing foreign code. MuseScore
-        // only allows file writes inside specific directories (per-user
-        // temp and the MuseScore data dirs), and the mscz writer does not
-        // work from plugins - use the allowed temp dir and musicxml.
-        var backupPath = fio.tempPath() + "/musescore-mcp-runbackup-" + root.runCounter + ".musicxml";
+        // Backup current score before executing foreign code. The path base
+        // comes from the server (params.backupPath, inside one of MuseScore's
+        // allowed directories); the musicxml writer is used because the mscz
+        // writer does not work from plugins.
+        var backupBase = (params.backupPath !== undefined)
+            ? params.backupPath
+            : "/tmp/musescore-mcp-runbackup-" + root.runCounter;
+        var backupPath = backupBase + ".musicxml";
         try {
-            writeScore(curScore, fio.tempPath() + "/musescore-mcp-runbackup-" + root.runCounter, "musicxml");
+            writeScore(curScore, backupBase, "musicxml");
         } catch (be) {
             console.log("runCode: backup write failed: " + be.toString());
             return { error: "backup write failed, aborting: " + be.toString() };
@@ -986,9 +986,12 @@ MuseScore {
 
         try {
             curScore.startCmd();
-            var ok = curScore.setVoiceVisible(curScore.staves[params.staff], params.voice, params.visible);
+            // The Q_INVOKABLE returns false on MuseScore 4.7.x regardless of
+            // the applied change (verified in phase 0, .ai/VERIFIERINGSRESULTAT.md),
+            // so success is reported from absence of exceptions only.
+            curScore.setVoiceVisible(curScore.staves[params.staff], params.voice, params.visible);
             curScore.endCmd();
-            return { success: true, applied: ok, staff: params.staff, voice: params.voice, visible: params.visible };
+            return { success: true, staff: params.staff, voice: params.voice, visible: params.visible };
         } catch (e) {
             if (curScore) curScore.endCmd(true);
             return { error: e.toString() };
@@ -1619,22 +1622,41 @@ MuseScore {
     // Delete current selection
     function deleteSelection(params) {
         if (!curScore) return { error: "No score open" };
-        
+
+        // Snapshot for honest verification: cmd-based delete is unreliable
+        // on MuseScore 4.7 (verified in phase 0: the delete action hits a
+        // Score::deleteRange assert unless the notation selection is in a
+        // state the action accepts), so report whether anything actually
+        // changed instead of claiming success unconditionally.
+        var before = getVoices({});
+
         // Start command for undo
         curScore.startCmd();
-        
+
         try {
             var cursor = createCursor({
                 measure: params.measure
             });
-            
-            cmd("delete");
-            
+
+            cmd("action://delete");
+
             curScore.endCmd();
 
-            return { 
-                success: true, 
-                message: "Selection deleted", 
+            var after = getVoices({});
+            var beforeTotal = 0, afterTotal = 0;
+            for (var s = 0; s < before.staves.length; s++) {
+                for (var v = 0; v < before.staves[s].voices.length; v++) {
+                    beforeTotal += before.staves[s].voices[v].elementCount;
+                    afterTotal += after.staves[s].voices[v].elementCount;
+                }
+            }
+
+            return {
+                success: true,
+                deleted: afterTotal < beforeTotal,
+                message: afterTotal < beforeTotal
+                    ? "Selection deleted (" + (beforeTotal - afterTotal) + " elements)"
+                    : "Delete action dispatched but nothing was deleted on this MuseScore version (known 4.7.x limitation)",
                 currentSelection: selectionState,
                 currentScore: getScoreSummary()
             };

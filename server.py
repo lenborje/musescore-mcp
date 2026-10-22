@@ -4,7 +4,6 @@ import json
 import sys
 import logging
 import os
-import tempfile
 import itertools
 from typing import Dict, Any, Optional, List, Literal, NotRequired, TypedDict
 
@@ -15,6 +14,15 @@ logging.basicConfig(
     handlers=[logging.StreamHandler(sys.stderr)]
 )
 logger = logging.getLogger("MuseScoreMCP")
+
+# MuseScore only allows plugin file writes inside specific directories
+# (its data dirs and the per-user temp dir, whose /var path additionally
+# fails the allowlist after macOS symlink canonicalization). Use the
+# MuseScore data dir for exports and backups; override with the
+# MUSESCORE_MCP_DATA_DIR environment variable.
+MSCORE_DATA_DIR = os.environ.get("MUSESCORE_MCP_DATA_DIR") or os.path.expanduser(
+    "~/Documents/MuseScore4"
+)
 
 class MuseScoreClient:
     """Client to communicate with MuseScore WebSocket API."""
@@ -70,8 +78,13 @@ class MuseScoreClient:
         Raises RuntimeError if the plugin does not confirm the export or the
         file does not appear at the reported path.
         """
+        if not os.path.isdir(MSCORE_DATA_DIR):
+            raise RuntimeError(
+                f"export directory does not exist: {MSCORE_DATA_DIR} "
+                "(set MUSESCORE_MCP_DATA_DIR to a MuseScore-allowed directory)"
+            )
         base = os.path.join(
-            tempfile.gettempdir(),
+            MSCORE_DATA_DIR,
             f"musescore-mcp-export-{os.getpid()}-{next(self._export_counter)}",
         )
         response = await self.send_command("exportScore", {"path": base, "format": fmt})
@@ -452,13 +465,18 @@ class MuseScoreMCP:
               mutate it, do not reassign it)
             The return value must be JSON-serializable. Each run is one undo
             step (errors roll back) and a musicxml backup of the score is
-            written to the allowed temp directory first.
+            written inside a MuseScore-allowed directory first.
             The code runs on MuseScore's GUI thread - an infinite loop freezes
             MuseScore unrecoverably. See docs/AGENT-COOKBOOK.md for patterns
             and known pitfalls. Requires the plugin property allowEval: true;
             otherwise returns an error explaining how to enable it.
             """
-            return await self.client.send_command("runCode", {"code": code, "params": params or {}})
+            backup_base = os.path.join(
+                MSCORE_DATA_DIR, f"musescore-mcp-runbackup-{os.getpid()}-{next(self.client._export_counter)}"
+            )
+            return await self.client.send_command(
+                "runCode", {"code": code, "params": params or {}, "backupPath": backup_base}
+            )
 
         @self.mcp.tool()
         async def music_theory_query(

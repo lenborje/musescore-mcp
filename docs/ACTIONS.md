@@ -25,7 +25,7 @@ Conventions:
 | `getScoreMetadata` | – | Cheap metadata: title, composer, measures, staves, time/key signatures. |
 | `syncStateToSelection` | – | Rebuild state from MuseScore's current selection. |
 | `getCursorInfo` | `verbose` ("false" to skip score summary) | Current position incl. `voice`. |
-| `undo` | – | One undo step. |
+| `undo` | – | One undo step. MuseScore 4.7.x registers undo as `action://undo`; the plugin handles this internally. |
 | `ping` | – | Returns "pong". |
 | `goToBeginningOfScore` | – | Reset cursor state to score start. |
 
@@ -65,7 +65,7 @@ Voice notes:
 | `addTuplet` | `ratio`, `duration`, `advanceCursorAfterAction` (bool), `voice` (opt) | |
 | `insertMeasure` | – | At current position. |
 | `appendMeasure` | `count` | |
-| `deleteSelection` | `measure` | Deletes current selection via `cmd("delete")`. |
+| `deleteSelection` | `measure` | Dispatches the delete action and verifies honestly: on MuseScore 4.7.x the delete action hits an internal assert unless the notation selection is in a state the action accepts, so the response reports `deleted: true/false` — check it. |
 | `setTimeSignature` | `numerator`, `denominator` | |
 | `setTempo` | – | |
 
@@ -81,7 +81,7 @@ Voice notes:
 
 | Action | Params | Notes |
 |---|---|---|
-| `exportScore` | `path` (absolute, without extension), `format` ("musicxml" or "mscz") | Writes the current score; returns `path` of the written file (extension appended). The server generates temp paths and verifies the file exists. |
+| `exportScore` | `path` (absolute, without extension, inside a MuseScore-allowed directory), `format` ("musicxml" or "mscz") | Writes the current score; returns `path` of the written file (extension appended). MuseScore only allows plugin writes to its data dirs and the per-user temp dir (note: the mscz writer does not work from plugins on 4.7.x); the server generates paths under `~/Documents/MuseScore4` (`MUSESCORE_MCP_DATA_DIR` overrides) and verifies the file exists. |
 
 ## Sequencing
 
