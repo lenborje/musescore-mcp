@@ -1,5 +1,6 @@
 import QtQuick 2.9
 import MuseScore 3.0
+import FileIO 3.0
 
 // Phase 0 verification plugin (ARBETSPLAN.md, .ai/).
 // Purpose: establish runtime facts on the installed MuseScore (4.7.5) that
@@ -9,24 +10,44 @@ import MuseScore 3.0
 //   T3  cmd() availability
 //   T4  cursor.voice readback per voice
 //   T5  Score.setVoiceVisible
-//   T6  writeScore export (musicxml + mscz)
+//   T6  writeScore export (musicxml, mscx, mscz)
 //   T7  voice swap via cmd() with candidate command codes (try-list)
+//
+// Output: results are written to /tmp/mcp-verify-result.txt after every
+// test (FileIO), mirrored to console.log and to api.log.info when the
+// MuseApi.Log api is available. console.log alone is discarded by
+// MuseScore 4.7 when a plugin is run from the Plugins menu.
 //
 // SAFETY GATE: refuses to run unless the open score is dev/test-voices.mscz
 // (movementTitle "MCP verify test"). No other score is ever touched.
 //
 // Run: open dev/test-voices.mscz in MuseScore, then Plugins > MCP Verify Voices.
-// Read output in MuseScore's plugin console (start MuseScore from a terminal
-// to see console.log output).
 
 MuseScore {
     id: root
     menuPath: "Plugins.MCP Verify Voices"
     requiresScore: true
     description: "Phase 0 verification for MCP voice support"
-    version: "0.1"
+    version: "0.2"
 
-    function log(msg) { console.log("[MCP-VERIFY] " + msg); }
+    property var lines: []
+    property string resultPath: "/tmp/mcp-verify-result.txt"
+
+    FileIO { id: io }
+
+    function log(msg) {
+        console.log("[MCP-VERIFY] " + msg);
+        try {
+            if (typeof api !== "undefined" && api.log && typeof api.log.info === "function") {
+                api.log.info("[MCP-VERIFY] " + msg);
+            }
+        } catch (le) { /* api.log unavailable */ }
+        root.lines.push(msg);
+        try {
+            io.source = root.resultPath;
+            io.write(root.lines.join("\n") + "\n");
+        } catch (we) { /* FileIO write failure - console/api.log only */ }
+    }
 
     function isPitched(e) {
         return e && (e.name === "Note" || e.name === "Chord");
@@ -46,8 +67,6 @@ MuseScore {
         return null;
     }
 
-    // First pitched element (MIDI pitch) in the given voice on staff 0,
-    // starting from the beginning of the score.
     function pitchAtVoice(voice) {
         var cursor = curScore.newCursor();
         cursor.inputStateMode = Cursor.INPUT_STATE_INDEPENDENT;
@@ -63,6 +82,7 @@ MuseScore {
     }
 
     onRun: {
+        root.lines = [];
         log("=== Phase 0 verification starting ===");
 
         // Safety gate
@@ -70,7 +90,6 @@ MuseScore {
         log("movementTitle = '" + title + "'");
         if (title !== "MCP verify test") {
             log("REFUSING: open dev/test-voices.mscz before running this plugin. No tests executed.");
-            Qt.quit();
             return;
         }
 
@@ -121,14 +140,16 @@ MuseScore {
             log("T5 setVoiceVisible FAILED: " + e.toString());
         }
 
-        // T6: writeScore export to /tmp (files checked from shell afterwards)
-        try {
-            var okXml = writeScore(curScore, "/tmp/mcp-verify-export", "musicxml");
-            log("T6 writeScore musicxml = " + okXml);
-            var okMscz = writeScore(curScore, "/tmp/mcp-verify-export", "mscz");
-            log("T6 writeScore mscz = " + okMscz);
-        } catch (e) {
-            log("T6 writeScore FAILED: " + e.toString());
+        // T6: writeScore export (musicxml, mscx, mscz) to /tmp
+        var formats = ["musicxml", "mscx", "mscz"];
+        for (var fi = 0; fi < formats.length; fi++) {
+            var fmt = formats[fi];
+            try {
+                var ok = writeScore(curScore, "/tmp/mcp-verify-export-" + fmt, fmt);
+                log("T6 writeScore " + fmt + " = " + ok);
+            } catch (e) {
+                log("T6 writeScore " + fmt + " FAILED: " + e.toString());
+            }
         }
 
         // T7: voice swap via cmd() try-list (selection = measure 1, staff 0)
@@ -170,6 +191,5 @@ MuseScore {
         }
 
         log("=== Phase 0 verification done ===");
-        Qt.quit();
     }
 }
