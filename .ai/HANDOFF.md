@@ -37,7 +37,7 @@ Långsiktigt mål: MCP ska, så långt rimligt, kunna utföra allt MuseScore-GUI
 
 | # | Beslut |
 |---|---|
-| F1 | QML-migrering avskedad som huvudspår; designa protokollneutralt. (Machbarhetsrapporten togs bort ur repot 2026-10-22 när spåret avskedades.) |
+| F1 | QML-migrering avskedad som huvudspår; designa protokollneutralt. Referensmaterial för eventuell återkomst: `.ai/serverless-mcp/` (brief + machbarhetsrapporter från Vibe och Codex). |
 | F2 | Röster: läs + navigera + skriva, inkl. röstväxling mellan godtyckliga röster och synlighet. |
 | F3 | `voice`-parameter genomtrådad i befintliga actions + nya läs/actions; ingen state-full röstnavigering. |
 | F4 | Röstoperationer exponeras enbart via processSequence, inga nya MCP-röstverktyg i v1. |
