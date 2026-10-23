@@ -2,27 +2,28 @@
 
 Dokumentet är sessionsöverskridande kontext. Läs detta + `ARBETSPLAN.md` + `VERIFIERINGSRESULTAT.md` innan du fortsätter arbetet.
 
-## AKUELLT LÄGE 2026-10-23 (kväll) — läs detta först
+## AKUELLT LÄGE 2026-10-23 (sent) — läs detta först
 
-**Helhetstet GRÖNT (10/10)** — den rena bryggan är runtime-verifierad: `dev/bridge-smoke-test.py` kördes mot öppet testpartitur med F28-pluginen: röst-census, verifierad röstväxling, verifierad undo-återställning, runCode-grind, processSequence. Fas 0 är stängd (se VERIFIERINGSRESULTAT.md), F28 genomförd, versionsmedveten undo på plats.
-
-**run_qml är nu helhetsverifierad (8/8)** — `dev/run-qml-test.py`: eval, ctx-fasad + consoleLog, ctx.processCommand, beständig state (överlever till och med pluginomstarter), rollback vid kast (pitchverifierad), committad mutation + undo (60→72→60), cookbook-traverseringen. Runtime-fakta tillagda i cookbooken: `addNote` på belagd position ERSÄTTER noten (verifiera pitch, inte antal).
-
-**setInstrumentSound/mixern är empiriskt verifierad (2026-10-23)**: på ett ryskt nedladdat partitur byttes alla fem spårnamn till svenska (Сопрано→Sopran, Альт→Alt, Тенор→Tenor, Бас→Bas, Орган→Orgel) med instrument, noter och klang bevarade. Mixern uppdaterar endast när partituret sparats, stängts och öppnats igen — inte realtid, inte mixer-omstart.
+**Alla planerade faser är genomförda och runtime-verifierade:**
+- Ren brygga (F28), 7 verktyg: helhetstest GRÖNT 10/10 (`dev/bridge-smoke-test.py`: röst-census, verifierad röstväxling, verifierad undo, runCode-grind, processSequence).
+- run_qml GRÖNT 8/8 (`dev/run-qml-test.py`: eval, ctx-fasad + consoleLog, ctx.processCommand, beständig state — överlever t.o.m. pluginomstarter —, rollback vid kast, committad mutation + undo, cookbook-traversering). Runtime-fakta i cookbooken: `addNote` på belagd position ERSÄTTER noten (verifiera pitch, inte antal).
+- setInstrumentSound/mixern empiriskt verifierad på ett ryskt nedladdat partitur: alla fem spårnamn till svenska (Сопрано→Sopran, Альт→Alt, Тенор→Tenor, Бас→Bas, Орган→Orgel), instrument/noter/klang bevarade. Mixern uppdaterar först när partituret sparats, stängts och öppnats igen — inte realtid, inte mixer-omstart.
+- GraalPy-stöd (användarens default-python): pydantic-NameError-shim + klassiskt alias i stället för PEP 695 i server.py; **mcp är spärrat `>=1.2.0,<2` i requirements.txt — ta inte bort spärren** (mcp 2.x byter namn på FastMCP till MCPServer). Verifierat: GraalPy 25.0 startar servern och registrerar alla verktyg; CPython-regression grön.
+- Agent-självinstallation: `docs/INSTALL-PROMPT.md` (prompt till agenten) + flervärds-tabell i README. Möjligt i alla värdar (Vibe: `vibe mcp add --transport stdio`, Codex: `codex mcp add`, Claude Desktop: config-JSON + full omstart, Claude Code: `claude mcp add`, Copilot/VS Code: `.vscode/mcp.json`). **Användarens Vibe har redan en fungerande registrering** (post "MuseScore" i ~/.vibe/config.toml, cenv-python + server.py — aktuell, registrerar dagens 7 verktyg).
 
 Projektets kvarvarande backlog (medvetet uppskjutet, se ARBETSPLAN "Efter fas 3"):
 - Atomisk processSequence (ett undo-steg för hela batchen) — kräver refactor av alla actions till apply/commit-par + runtime-verifiering.
 - Kuratering av återkommande run_qml-uppgifter till stabila actions (F20) — efter verklig användning (användarens egna plugin CopyLyrics.qml, FillRepeatedLyrics.qml, CantaiSvengelska/Tyska är naturliga första kandidater).
 - Ev. röstnavigerings-förbättringar (F3:S "ingen state-full röstnavigering" kan omprövas om agenterna visar behov).
 
-Kända runtime-fakta: se tabellen i VERIFIERINGSRESULTAT.md (V1–V21). Viktigast: swap = `cmd("voice-x12")`, undo = `cmd("action://undo")`, eval fungerar, `setVoiceVisible` returvärdet oanvändbart, FileIO-skrivningar blockeras — **använd aldrig FileIO i plugin**, delete via cmd assertar (deleteSelection verifierar ärligt), console.log från meny-körda plugins kastas bort (använd api.log.info + MuseScores loggfil).
+Kända runtime-fakta: se tabellen i VERIFIERINGSRESULTAT.md (V1–V21). Viktigast: swap = `cmd("voice-x12")`, undo = versionsmedveten (`action://notation/undo` ≥4.7 via `mscoreMajorVersion`), eval fungerar, `setVoiceVisible` returvärdet oanvändbart, **FileIO-skrivningar blockeras (apiv1::isPathAllowed + macOS /private-kanonisering) — använd aldrig FileIO i plugin**, delete via cmd assertar (deleteSelection verifierar ärligt), console.log från meny-körda plugins kastas bort (använd api.log.info + MuseScores loggfil).
 
 ## Uppdrag och upphov
 
 Behåll Python-servern (`server.py`, FastMCP/mcp 1.30.0). Utöka plugin och server med tre kapabiliteter:
 
 1. **Röster**: läs/navigera/skriva i flera understämmor per system, inklusive röstväxling och synlighet.
-2. **music21**: generella musikteoretiska verktyg i servern (koppling till plugin för partiturinhämtning).
+2. **Server = ren brygga** (ursprungligen music21-analys; **supersederat av beslut F28 2026-10-23**: ingen music21, ingen partiturfils-export — MusicXML-tur och retur förkastas, music21:s beroendebörda togs bort).
 3. **run_qml**: agenten skickar godtycklig QML/JS-kod som exekveras in-process i MuseScore — för komplexa uppgifter som är dyra att styra stegvis över MCP (upphovet: användaren har upprepade gånger bett agenter skriva QML-plugins för specifika uppgifter, t.ex. kopiera sångtext, transformera text, skapa pianoreduktion).
 
 Långsiktigt mål: MCP ska, så långt rimligt, kunna utföra allt MuseScore-GUI erbjuder.
@@ -34,10 +35,10 @@ Långsiktigt mål: MCP ska, så långt rimligt, kunna utföra allt MuseScore-GUI
 - Plugin-API (verifierat i källan, `src/engraving/api/v1/`):
   - `Cursor.voice` (skriv/läs, track % 4, dvs. röster 0–3 per staff), `Cursor.staffIdx`. Pluginet accepterar redan `params.voice` i `createCursor` (rad 211 i musescore-mcp-plugin.qml) men inget annat använder det.
   - `Score.setVoiceVisible(staff, voiceIndex, visible)` — score.h:697.
-  - `writeScore(score, name, ext)` — qmlpluginapi.h:537 / engravingapiv1.h:290. Export av musicxml/mscz möjlig.
-  - `PluginAPI::cmd(s)` — qmlpluginapi.h:534. Pluginet använder redan `cmd("delete")`. I dev-main dispatchas `muse::rcommand::Command(s)` rakt av (med kompattabell för äldre namn).
-  - FileIO i util.h: `read()`, `write()`, `writeBinary()`, `remove()`, `tempPath()` osv. — plugins har full FS-åtkomst med användarens rättigheter.
-  - Ingen `dirty`/`saved`-egenskap i score-API:t — "kräv sparat partitur"-grind går inte; `.mscz`-backup före riskfylld körning används istället.
+  - `writeScore(score, name, ext)` — qmlpluginapi.h:537 / engravingapiv1.h:290. **Omtvistat: returnerar tyst false på 4.7.5** (enda lyckade utskrift i körning 1 av fas 0); lämnat ouppklarat och oaktuellt per F28.
+  - `PluginAPI::cmd(s)` — qmlpluginapi.h:534. Action-koder är versionsberoende: swap = `voice-xNN`, undo = `action://notation/undo` på ≥4.7 (läs av `mscoreMajorVersion`/`mscoreMinorVersion`), delete assertar internt (Score::deleteRange).
+  - FileIO i util.h — **blockeras av säkerhetsskiktet** (`apiv1::isPathAllowed`; tillåtna kataloger + macOS /private-kanoniseringsbugg) och förgiftar sessionen: använd aldrig FileIO i plugin.
+  - Ingen `dirty`/`saved`-egenskap i score-API:t. runCode har ingen fil-backup; skyddet är ett undo-steg (rollback vid fel, ångra med undo-kommandot).
   - Röstväxling implementeras i C++ som `ExchangeVoices::exchangeVoicesInSelection` (`src/engraving/editing/exchangevoices.cpp`) — agerar på aktuellt urval, hanterar alla annex korrekt. INTE exponerat som API — nås via `cmd()`.
 - **Kommandokoder för röstväxling** (F9, try-lista, logga vilken som tog):
   - 4.7.5 (binärsträngar verifierade med `strings`): `voice-x12`, `voice-x13`, `voice-x14`, `voice-x23`, `voice-x24`, `voice-x34`.
