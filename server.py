@@ -101,82 +101,10 @@ class MuseScoreMCP:
         async def get_cursor_info():
             """Get information about the current cursor position."""
             return await self.client.send_command("getCursorInfo")
-        
-        # @self.mcp.tool()
-        # async def go_to_measure(measure: int):
-        #     """Navigate to a specific measure."""
-        #     return await self.client.send_command("goToMeasure", {"measure": measure})
-        
-        # @self.mcp.tool()
-        # async def go_to_final_measure():
-        #     """Navigate to the final measure of the score."""
-        #     return await self.client.send_command("goToFinalMeasure")
-        
-        # @self.mcp.tool()
-        # async def go_to_beginning_of_score():
-        #     """Navigate to the beginning of the score."""
-        #     return await self.client.send_command("goToBeginningOfScore")
-        
-        # @self.mcp.tool()
-        # async def next_element():
-        #     """Move cursor to the next element."""
-        #     return await self.client.send_command("nextElement")
-        
-        # @self.mcp.tool()
-        # async def prev_element():
-        #     """Move cursor to the previous element."""
-        #     return await self.client.send_command("prevElement")
-        
-        # @self.mcp.tool()
-        # async def select_current_measure():
-        #     """Select the current measure."""
-        #     return await self.client.send_command("selectCurrentMeasure")
-        
-        # # Notes & Measures Tools
-        # @self.mcp.tool()
-        # async def add_note(pitch: int = 64, duration: object = {"numerator": 1, "denominator": 4}):
-        #     """Add a note at the current cursor position with the specified pitch and duration."""
-        #     return await self.client.send_command("addNote", {"pitch": pitch, "duration": duration})
-        
-        # @self.mcp.tool()
-        # async def add_rest(duration: object = {"numerator": 1, "denominator": 4}):
-        #     """Add a rest at the current cursor position."""
-        #     return await self.client.send_command("addRest", {"duration": duration})
-        
-        # @self.mcp.tool()
-        # async def add_tuplet(duration: object = {"numerator": 1, "denominator": 4}, ratio: object = {"numerator": 3, "denominator": 2}):
-        #     """Add a tuplet at the current cursor position."""
-        #     return await self.client.send_command("addTuplet", {
-        #         "ratio": {"duration": duration, "ratio": ratio}
-        #     })
-        
-        # @self.mcp.tool()
-        # async def insert_measure():
-        #     """Insert a measure at the current position."""
-        #     return await self.client.send_command("insertMeasure")
-        
-        # @self.mcp.tool()
-        # async def append_measure(count: int = 1):
-        #     """Append measures to the end of the score."""
-        #     return await self.client.send_command("appendMeasure", {"count": count})
-        
-        # @self.mcp.tool()
-        # async def delete_selection(measure: Optional[int] = None):
-        #     """Delete the current selection or specified measure."""
-        #     params = {}
-        #     if measure is not None:
-        #         params["measure"] = measure
-        #     return await self.client.send_command("deleteSelection", params)
-        
-        # # Time & Tempo Tools
-        # @self.mcp.tool()
-        # async def set_time_signature(numerator: int = 4, denominator: int = 4):
-        #     """Set the time signature."""
-        #     return await self.client.send_command("setTimeSignature", {
-        #         "numerator": numerator,
-        #         "denominator": denominator
-        #     })
 
+        # All other actions (navigation, notes, measures, time signature,
+        # voices, ...) are reached through processSequence - their parameter
+        # schemas are defined by the ActionSequence union below.
 
         class getScoreAction(TypedDict):
             action: Literal["getScore"]
