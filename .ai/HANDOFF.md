@@ -8,10 +8,11 @@ Fas 0–3 är implementerade och committade (röster, music21-verktyg, run_qml +
 
 **`writeScore` från plugin returnerar tyst `false`** för alla format och alla sökvägar (inkl. tillåtna kataloger) — utom i körning 1 där musicxml till /tmp faktiskt skrevs. Ingen förklaring kvar i källan (4.7.5:s io-lager är restriktionsfritt; se VERIFIERINGSRESULTAT.md, körning 5 + källanalys). Upphör INTE med att anta att writeScore fungerar — det är omtvistat.
 
-Imorgon:
-1. Hämta tskovlund/mcp-scores pluginkällkod från GitHub (src/mcp_score/musescore + src/mcp_score/bridge) — deras CI är grön på 4.7.5; efterlikna deras partiturdata-flöde.
-2. Om deras mönster inte hjälper: implementera plan B — server-side music21-ström ur getScoreSummary-JSON, och server-side JSON-snapshot som runCode-backup (ersätter fil-backupen helt).
-3. Stäng fas 0: dokumentera i VERIFIERINGSRESULTAT.md, uppdatera ARBETSPLAN-status.
+Imorgon (eller nästa session):
+1. **mcp-score-analys klar** (`.ai/mcp-score-analys.md`): tskovlund/mcp-score använder ALDRIG writeScore — generation sker serverside (music21-script), rendering via mscore-CLI, live-brygga med ytlig läsning och voice hårdkodad 0. Rekommendation: sluta jaga writeScore, genomför plan B direkt (server-side music21-ström ur getScoreSummary-JSON; JSON-snapshot som runCode-backup; CLI-render för filer).
+2. Anta deras mönster: versionsmedveten undo via `plugin.mscoreMajorVersion` (`action://notation/undo` ≥4.7), `endCmd(response.error)`-rollback, processSequence som ett undo-steg.
+3. Nya verktyg (bevisade mönster): `generate_score`-modell (music21-script serverside → MusicXML) + render/convert via mscore-CLI.
+4. Stäng fas 0: dokumentera i VERIFIERINGSRESULTAT.md, uppdatera ARBETSPLAN-status.
 
 Kända runtime-fakta (bevisade, styr implementationen): se tabellen i VERIFIERINGSRESULTAT.md (V1–V21). Viktigast: swap = `cmd("voice-x12")`, undo = `cmd("action://undo")`, eval fungerar, `setVoiceVisible` returvärdet är oanvändbart, FileIO-skrivningar blockeras (macOS /private-kanonisering vs allowlist) — **använd aldrig FileIO i plugin**, delete via cmd assertar (deleteSelection verifierar ärligt), console.log från meny-körda plugins kastas bort (använd api.log.info + MuseScores loggfil).
 
