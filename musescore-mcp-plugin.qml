@@ -194,15 +194,27 @@ MuseScore {
 
     // Undo
 
+    // True on MuseScore builds that register notation actions under
+    // action:// URIs (verified on 4.7.5; plain codes were used through 4.6).
+    function isMuseScore47OrLater() {
+        try {
+            return (mscoreMajorVersion > 4)
+                || (mscoreMajorVersion === 4 && mscoreMinorVersion >= 7);
+        } catch (e) {
+            return false;
+        }
+    }
+
+    function undoActionCode() {
+        return isMuseScore47OrLater() ? "action://notation/undo" : "undo";
+    }
+
     function undo() {
         if (!curScore) return { error: "No score open" };
 
         curScore.startCmd();
         try {
-            // MuseScore 4.7 registers undo as action://undo; the legacy
-            // "undo" code is not a registered action there (verified in
-            // phase 0 run 2, .ai/VERIFIERINGSRESULTAT.md).
-            cmd("action://undo");
+            cmd(undoActionCode());
             curScore.endCmd();
             return { success: true, message: "Undo successful", currentSelection: selectionState, currentScore: getScoreSummary() };
         } catch (e) {

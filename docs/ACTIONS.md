@@ -89,6 +89,11 @@ undo, getVoices, swapVoices, setVoiceVisibility.
 
 Returns the state after the last action plus a full score summary.
 
+Undo semantics: each action is its own undo step. A sequence that fails
+halfway leaves earlier actions committed (each revertible with `undo`).
+An atomic batch (one undo step for the whole sequence) is a known
+follow-up.
+
 ## Direct tool (not in processSequence)
 
 - `run_qml {code, params}` — executes JavaScript in the plugin. Opt-in:

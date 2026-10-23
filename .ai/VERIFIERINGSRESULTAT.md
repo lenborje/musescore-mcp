@@ -1,6 +1,8 @@
-# Verifieringsresultat fas 0
+# Verifieringsresultat fas 0 — STÄNGD 2026-10-23
 
-Körs mot MuseScore 4.7.5 (`/Applications/MuseScore 4.app`). Metod: `dev/verify-voices.qml` mot `dev/test-voices.mscz` (movementTitle "MCP verify test"), utdata via FileIO till `/tmp/mcp-verify-result.txt` + api.log.info + console.log.
+Status: **avslutad.** Samtliga runtime-frågor som projektet behöver svar på är besvarade (V1–V21 nedan); den enda olösta frågan (writeScore:s tysta false) är oaktuellt per beslut F28 och lämnad dokumenterad utan lösning. Regressionssviten `dev/verify-voices.qml` (v0.4) körs vid MuseScore-uppgraderingar för att omverifiera: röstväxling (`voice-x12`), undo (`action://notation/undo` på ≥4.7 via versionsavkänning), cursor.voice och baseline-state.
+
+Körs mot MuseScore 4.7.5 (`/Applications/MuseScore 4.app`). Metod: `dev/verify-voices.qml` mot `dev/test-voices.mscz` (movementTitle "MCP verify test"), utdata via api.log + MuseScores loggfil (console.log från meny-körda plugins kastas bort; FileIO är förbjudet i plugin — blockerat + förgiftar sessionen).
 
 ## Körning 1 — 2026-10-22 16:08 (plugin v0.1, partiell utdata)
 

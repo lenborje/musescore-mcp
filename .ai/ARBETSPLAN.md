@@ -1,6 +1,13 @@
 # Arbetsplan: Röster, music21 och run_qml för musescore-mcp
 
-Status: planerad, ej påbörjad. Beslutsunderlag: grill-session 2026-10-22 (27 beslut, se `HANDOFF.md`).
+Status 2026-10-23:
+- **Fas 0: STÄNGD** (runtime-fakta V1–V21 i VERIFIERINGSRESULTAT.md; regressionssvit `dev/verify-voices.qml` kvar för omverifiering).
+- **Fas 1 (röster): implementerad; runtime-verifierad** i fas 0-körningar (swap, cursor.voice); helhetstest via MCP återstår.
+- **Fas 2 (export+music21): UTGÅR** per beslut F28 — servern är en ren brygga; ingen music21, ingen partiturfils-export.
+- **Fas 3 (run_qml + docs): implementerad**; eval runtime-verifierat, kodgränssnittet (allowEval, kontrakt) bevarat; fil-backup borttagen (ett undo-steg är säkerheten); helhetstest återstår.
+
+Återstående arbete: helhetstest av den rena bryggan (MuseScore + plugin + MCP-klient), ev. atomisk processSequence (ett undo-steg, se ACTIONS.md), kuratering av återkommande run_qml-uppgifter (F20).
+
 Principer som gäller hela planen: strikt additiv kompatibilitet (F7), röstoperationer via processSequence (F4), inga ändringar i MuseScore självt.
 
 ## Beroendegraf
