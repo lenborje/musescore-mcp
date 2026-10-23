@@ -2,16 +2,14 @@
 
 Dokumentet är sessionsöverskridande kontext. Läs detta + `ARBETSPLAN.md` + `VERIFIERINGSRESULTAT.md` innan du fortsätter arbetet.
 
-## AKUELLT LÄGE 2026-10-23 — läs detta först
+## AKUELLT LÄGE 2026-10-23 (kväll) — läs detta först
 
-**Beslut F28 är genomfört: servern är nu en ren brygga (7 verktyg: connect_to_musescore, ping_musescore, get_score, get_score_metadata, get_cursor_info, processSequence, run_qml).** music21 är helt borta ur servern och requirements.txt; `exportScore` är borttaget ur plugin och schema; runCode har ingen fil-backup (ett undo-steg + undo-kommandot är säkerheten; agenten kan själv hämta get_score före/efter för jämförelse).
+**Helhetstet GRÖNT (10/10)** — den rena bryggan är runtime-verifierad: `dev/bridge-smoke-test.py` kördes mot öppet testpartitur med F28-pluginen: röst-census, verifierad röstväxling, verifierad undo-återställning, runCode-grind, processSequence. Fas 0 är stängd (se VERIFIERINGSRESULTAT.md), F28 genomförd, versionsmedveten undo på plats.
 
-**writeScore-mysteriet är därmed AKTUellt avslutat utan lösning** — ingen funktion behöver längre fil-export från pluginet. Det dokumenterade faktumet kvarstår (writeScore returnerar tyst false på 4.7.5 utom i en enda körning) om det någon gång blir relevant igen.
-
-**Kvar att göra (nästa session):**
-1. Runtimetest av den rena bryggan: kopiera in uppdaterat `musescore-mcp-plugin.qml`, kör MCP-klienten mot öppet partitur: röst-census, swap, undo, run_qml (med allowEval) + verifiera att fas 1-funktionaliteten fungerar i helhet.
-2. Anta mcp-scores mönster (från `.ai/mcp-score-analys.md`): versionsmedveten undo via `plugin.mscoreMajorVersion` (`action://notation/undo` ≥4.7), `endCmd(response.error)`-rollback, processSequence som ETT undo-steg.
-3. Fas 0 kan stängas (dokumentera i VERIFIERINGSRESULTAT.md, ARBETSPLAN-status).
+Projektets kvarvarande backlog (medvetet uppskjutet, se ARBETSPLAN "Efter fas 3"):
+- Atomisk processSequence (ett undo-steg för hela batchen) — kräver refactor av alla actions till apply/commit-par + runtime-verifiering.
+- Kuratering av återkommande run_qml-uppgifter till stabila actions (F20) — efter verklig användning.
+- Ev. röstnavigerings-förbättringar (F3:S "ingen state-full röstnavigering" kan omprövas om agenterna visar behov).
 
 Kända runtime-fakta: se tabellen i VERIFIERINGSRESULTAT.md (V1–V21). Viktigast: swap = `cmd("voice-x12")`, undo = `cmd("action://undo")`, eval fungerar, `setVoiceVisible` returvärdet oanvändbart, FileIO-skrivningar blockeras — **använd aldrig FileIO i plugin**, delete via cmd assertar (deleteSelection verifierar ärligt), console.log från meny-körda plugins kastas bort (använd api.log.info + MuseScores loggfil).
 
