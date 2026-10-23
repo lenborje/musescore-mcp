@@ -1,6 +1,6 @@
 # MuseScore MCP Server
 
-This MCP (Model Context Protocol) server integrates MuseScore with LLM clients like Claude Desktop, enabling basic music composition through natural language.
+This MCP (Model Context Protocol) server integrates MuseScore with LLM agents (Vibe, Codex, Claude, Copilot), enabling basic music composition through natural language.
 
 Brief demo here: https://www.canva.com/design/DAGlHeR706g/4UcXvK23I1axWOfm6lSSxQ/edit
 
@@ -49,11 +49,19 @@ plugin console; exports land in /tmp.
 
 ## Requirements
 
-- Python 3.9+
-- MuseScore 3 or 4 installed
-- MCP Python SDK
+- Python 3.9+ (CPython or GraalPy)
+- MuseScore Studio 4.4.2+ installed
+- One MCP-capable agent host (see below)
 
 ## Installation
+
+The server and the plugin are installed by the agent that will use them.
+
+**Easiest**: ask your agent to install the MCP into itself - point it at
+`docs/INSTALL-PROMPT.md` and it performs every step below, including
+registering the server in its own host, and verifies the connection.
+
+To do it by hand instead:
 
 1. Clone this repository:
    ```
@@ -61,26 +69,29 @@ plugin console; exports land in /tmp.
    cd musescore-mcp-server
    ```
 
-2. Install dependencies, either in a venv or globally:
+2. Install dependencies in a venv:
    ```
-   pip install -r requirements.txt
+   python3 -m venv venv
+   venv/bin/pip install -r requirements.txt
    ```
 
-3. Install the musescore-mcp-plugin by copying it into your MuseScore plugins dir (on my mac this was ~/Documents/MuseScore4/plugins)
+3. Install the MuseScore plugin by copying `musescore-mcp-plugin.qml` into
+   your MuseScore plugins dir (`~/Documents/MuseScore4/Plugins/` on macOS),
+   enable it in Plugins > Manage plugins, and launch it from the Plugins
+   menu each session.
 
-4. Configure your LLM with the MCP server (server.py). If you are using Claude Desktop and a venv, this can be done by creating a claude_desktop_config file like so:
-   ```json
-   {
-    "mcpServers": {
-      "musescore": {
-        "command": "bash",
-        "args": [
-          "-c",
-          "source /path/to/venv/activate && python3 /path/to/server.py"
-        ]
-      }
-    }
-   ```
+4. Register the MCP server (command: the venv python; args: the path to
+   `server.py`) in your host:
+
+   | Host | Registration | Takes effect |
+   |---|---|---|
+   | Vibe | `vibe mcp add musescore --transport stdio --command <venv>/bin/python --arg <repo>/server.py` | next session |
+   | Codex CLI | `codex mcp add musescore -- <venv>/bin/python <repo>/server.py` | next session |
+   | Claude Code | `claude mcp add musescore -- <venv>/bin/python <repo>/server.py` | next session |
+   | Claude Desktop | `mcpServers` entry in `claude_desktop_config.json` | after full app restart |
+   | Copilot in VS Code | `.vscode/mcp.json` (or "MCP: Open User Configuration") | on save, VS Code offers to start it |
+
+   `docs/INSTALL-PROMPT.md` contains the exact config snippets.
    
 ## Usage
 
@@ -90,7 +101,7 @@ Open musescore and whatever score you want to use. Then, connect the musescore-m
 
 ### Example Queries
 
-Once connected, you can ask Claude questions like:
+Once connected, you can ask your assistant questions like:
 
 - "Help me come up with some possible chords for the melody in my score
 - Compose a simple melody and show me 4 ways to harmonize it
