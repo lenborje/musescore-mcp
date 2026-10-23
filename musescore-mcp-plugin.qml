@@ -1746,7 +1746,7 @@ MuseScore {
                 staff: params.staff,
                 before: { partName: beforePartName, instrumentId: beforeInstrumentId },
                 after: { partName: target.partName, instrumentId: target.instrumentId },
-                note: "Mixer track name re-created from the local instrument template; reopen the score if the Mixer title does not refresh live"
+                note: "Track name re-created from the local instrument template. Save and close/reopen the score to see the new name in the Mixer (verified: the Mixer refreshes only on score reload, not live)"
             };
         } catch (e) {
             curScore.endCmd(true); // Rollback on error

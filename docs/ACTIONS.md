@@ -75,7 +75,7 @@ Voice notes:
 |---|---|---|
 | `addInstrument` | `instrumentId` | |
 | `setStaffMute` | `staff`, `mute` | |
-| `setInstrumentSound` | `staff`, `instrumentId` | Real implementation: replaces the part's instrument with a fresh copy from the local instrument templates (`Score.replaceInstrument`). **Side effect that fixes localized mixer names**: the mixer track name (`trackName` in the file format) is re-created from the template, so tracks inherited from another user's language are renamed to the local equivalent. Pass the SAME instrumentId to only refresh the names (notes and sound kept); a different id changes transposition/clef/playback too. Reopen the score if the Mixer title does not refresh live. |
+| `setInstrumentSound` | `staff`, `instrumentId` | Real implementation: replaces the part's instrument with a fresh copy from the local instrument templates (`Score.replaceInstrument`). **Side effect that fixes localized mixer names**: the mixer track name (`trackName` in the file format) is re-created from the template, so tracks inherited from another user's language are renamed to the local equivalent. Pass the SAME instrumentId to only refresh the names (notes and sound kept); a different id changes transposition/clef/playback too. Verified on 4.7.5 with a downloaded Russian-language score: the new name appears in the Mixer only after the score is closed and reopened (saving first) - not live, and not on Mixer reopen. |
 
 ## Sequencing
 
@@ -117,6 +117,10 @@ can set this name directly (`Part.partName`, `Instrument.trackName` and
 
 The one working path is `setInstrumentSound`: replacing the instrument
 re-creates it from the *running* user's local templates, which resets
-the track name to the local language. Truly custom (non-template)
-track names require editing the `<trackName>` element in the `.mscx`
-inside the `.mscz` file offline - not possible through the live bridge.
+the track name to the local language. Empirically verified on 4.7.5
+with a downloaded Russian-language score (five parts): all track names
+were renamed to the local language with instrument ids, notes and
+playback kept; the Mixer shows the new names only after the score is
+saved, closed and reopened. Truly custom (non-template) track names
+require editing the `<trackName>` element in the `.mscx` inside the
+`.mscz` file offline - not possible through the live bridge.
