@@ -85,6 +85,11 @@ cursor.addNote(64);           // E4; addNote(pitch, true) extends the chord
 - **Never hold element references across `ctx` calls and write to stale
   ones** after structural changes (delete/insert measure, undo). Re-read.
 - `curScore` can be null if no score is open — check first and throw.
+- **`cursor.addNote(pitch)` at a position that already holds a note REPLACES
+  it** (runtime-verified: adding pitch 72 over a C4 replaced it - element
+  counts stay flat, only the pitch changed). Use `addNote(pitch, true)` to
+  add to the existing chord, or advance the cursor to free space first.
+  When verifying your writes, check pitches, not element counts.
 - Wrap mutations in the implicit command: you are already inside
   startCmd/endCmd; do NOT call them yourself from run_qml code.
 - Score elements in return values serialize as garbage — always map to plain
@@ -201,8 +206,11 @@ The staff must exist before you write to it (create staves via the
 
 ## Verification status
 
-Examples 1-3 are written against the MuseScore 4.7 plugin API surface
-(`ChordRest.lyrics`, `Score.setMetaTag`, `Cursor.addNote(pitch,
-addToChord)`, element `voice`/`staffIdx`) but have not yet been executed
-inside MuseScore. When `run_qml` is available, run each example on the
-`dev/test-voices.mscz` score first.
+The run_qml contract (eval, ctx facade, consoleLog, state that persists
+across calls, rollback-on-throw, committed runs reverted by undo) is
+verified end to end on MuseScore 4.7.5 by `dev/run-qml-test.py`
+(8/8 checks). The full traversal pattern of Example 1 is verified;
+its lyric-reading path needs a score with lyrics to show real output.
+Examples 2-3 follow the same verified primitives
+(`Score.setMetaTag`, `Cursor.addNote`) but have not been executed as
+whole tasks yet - run them on `dev/test-voices.mscz` first.

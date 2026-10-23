@@ -11,8 +11,8 @@ Checks (mutations are rolled back or undone):
   2  ctx facade (score, log)             -> hasScore, consoleLog
   3  ctx.processCommand ping             -> "pong"
   4  state persistence across calls      -> 1, then 2
-  5  mutation + deliberate throw         -> error, score unchanged
-  6  committed mutation + undo           -> restored after undo
+  5  mutation + deliberate throw         -> error, pitch unchanged
+  6  committed mutation + undo           -> pitch 60 -> 72 -> 60
   7  cookbook example 1 (lyrics walk)   -> 6 pitched elements, no lyrics
 """
 
@@ -46,10 +46,26 @@ async def run_code(ws, code, params=None):
     return inner if isinstance(inner, dict) else {}
 
 
-async def voice0_count(ws):
-    resp = await send(ws, "getVoices")
+READ_PITCH_CODE = (
+    "var c = ctx.newCursor(); c.inputStateMode = Cursor.INPUT_STATE_INDEPENDENT;"
+    " c.staffIdx=0; c.voice=0; c.rewindToTick(0);"
+    " var e = c.element;"
+    " if (!e) return null;"
+    " if (e.name === 'Note') return e.pitch;"
+    " return (e.notes && e.notes.length) ? e.notes[0].pitch : null;"
+)
+
+ADD_C5_CODE = (
+    "var c = ctx.newCursor(); c.inputStateMode = Cursor.INPUT_STATE_INDEPENDENT;"
+    " c.staffIdx=0; c.voice=0; c.rewindToTick(0); c.setDuration(1,4); c.addNote(72);"
+)
+
+async def voice0_pitch(ws):
+    """Pitch of the first element in voice 0 (cursor.addNote at a position
+    with an existing note REPLACES it, so counts stay flat - read pitch)."""
+    r = await run_code(ws, READ_PITCH_CODE)
     try:
-        return resp["result"]["staves"][0]["voices"][0]["elementCount"]
+        return r["result"]
     except (KeyError, TypeError):
         return None
 
@@ -79,52 +95,38 @@ async def main():
         expect("ctx.processCommand ping -> pong",
                r.get("status") == "success" and r.get("result") == "pong", str(r)[:200])
 
-        # 4. state persistence across calls
+        # 4. state persistence across calls (relative check: the counter
+        # survives even across suite runs, so expect increments, not absolutes)
+        r0 = await run_code(ws, "return state.counter || 0;")
         r1 = await run_code(ws, "state.counter = (state.counter || 0) + 1; return state.counter;")
         r2 = await run_code(ws, "state.counter = (state.counter || 0) + 1; return state.counter;")
+        base = r0.get("result")
         expect("state persists across run_qml calls",
-               r1.get("result") == 1 and r2.get("result") == 2,
-               f"first={r1.get('result')} second={r2.get('result')}")
+               r1.get("result") == base + 1 and r2.get("result") == base + 2,
+               f"base={base} first={r1.get('result')} second={r2.get('result')}")
 
-        # 5. mutation + deliberate throw -> rollback
-        before = await voice0_count(ws)
-        r = await run_code(
-            ws,
-            "var c = ctx.newCursor();\n"
-            "c.inputStateMode = Cursor.INPUT_STATE_INDEPENDENT;\n"
-            "c.staffIdx = 0;\n"
-            "c.voice = 0;\n"
-            "c.rewindToTick(0);\n"
-            "c.setDuration(1, 4);\n"
-            "c.addNote(72);\n"
-            'throw new Error("deliberate rollback test");')
-        after = await voice0_count(ws)
+        # 5. mutation + deliberate throw -> rollback (verified by pitch:
+        # addNote at an occupied position replaces the note, counts stay flat)
+        before = await voice0_pitch(ws)
+        r = await run_code(ws, ADD_C5_CODE + '\nthrow new Error("deliberate rollback test");')
+        after = await voice0_pitch(ws)
         ok = (r.get("status") == "error"
               and "deliberate rollback test" in r.get("error", "")
               and after == before)
-        expect("throw rolls the mutation back (element count unchanged)", ok,
+        expect("throw rolls the mutation back (pitch unchanged)", ok,
                f"before={before} after={after} resp={str(r)[:150]}")
 
-        # 6. committed mutation + undo restores
-        before = await voice0_count(ws)
-        r = await run_code(
-            ws,
-            "var c = ctx.newCursor();\n"
-            "c.inputStateMode = Cursor.INPUT_STATE_INDEPENDENT;\n"
-            "c.staffIdx = 0;\n"
-            "c.voice = 0;\n"
-            "c.rewindToTick(0);\n"
-            "c.setDuration(1, 4);\n"
-            "c.addNote(72);\n"
-            "return { added: true };")
-        committed = await voice0_count(ws)
-        expect("committed mutation changes the score",
-               r.get("status") == "success" and committed == before + 1,
+        # 6. committed mutation + undo restores (replacement 60 -> 72 -> 60)
+        before = await voice0_pitch(ws)
+        r = await run_code(ws, ADD_C5_CODE + "\nreturn { added: true };")
+        committed = await voice0_pitch(ws)
+        expect("committed mutation changes the score (pitch 60 -> 72)",
+               r.get("status") == "success" and before == 60 and committed == 72,
                f"before={before} committed={committed} resp={str(r)[:150]}")
         resp = await send(ws, "undo")
-        undone = await voice0_count(ws)
-        expect("undo restores the committed run",
-               resp.get("status") == "success" and undone == before,
+        undone = await voice0_pitch(ws)
+        expect("undo restores the committed run (pitch back to 60)",
+               resp.get("status") == "success" and undone == 60,
                f"undone={undone} resp={str(resp)[:150]}")
 
         # 7. cookbook example 1 (lyrics walk, adapted to also count pitched elements)
