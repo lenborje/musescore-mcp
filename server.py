@@ -1,3 +1,27 @@
+# GraalPy compatibility, applied before importing mcp (both mcp 1.x and 2.x
+# are affected): pydantic's PydanticUndefinedAnnotation.from_name_error reads
+# NameError.name, which GraalPy's NameError lacks. This breaks pydantic's
+# graceful deferral of TYPE_CHECKING-only forward references, and with it the
+# whole mcp import. The guard leaves CPython untouched.
+try:
+    NameError("probe").name
+    _graalPy_nameerror_needs_patch = False
+except AttributeError:
+    _graalPy_nameerror_needs_patch = True
+
+if _graalPy_nameerror_needs_patch:
+    import pydantic.errors
+
+    @classmethod
+    def _from_name_error_with_message_fallback(cls, name_error):
+        name = getattr(name_error, "name", None)
+        if name is None:
+            msg = str(name_error)
+            name = msg.split("'")[1] if "'" in msg else msg
+        return cls(name=name, message=str(name_error))
+
+    pydantic.errors.PydanticUndefinedAnnotation.from_name_error = _from_name_error_with_message_fallback
+
 from mcp.server.fastmcp import FastMCP
 import websockets
 import json
@@ -239,7 +263,10 @@ class MuseScoreMCP:
             action: Literal["setVoiceVisibility"]
             params: setVoiceVisibilityParams
 
-        type ActionSequence = List[getScoreAction | getScoreMetadataAction | addNoteAction | addRestAction | addTupletAction | appendMeasureAction | deleteSelectionAction | getCursorInfoAction | goToMeasureAction | nextElementAction | prevElementAction | selectCurrentMeasureAction | insertMeasureAction | goToFinalMeasureAction | goToBeginningOfScoreAction | setTimeSignatureAction | undoAction | nextStaffAction | prevStaffAction | getVoicesAction | swapVoicesAction | setVoiceVisibilityAction]
+        # Classic alias assignment instead of a PEP 695 `type` statement:
+        # pydantic's TypeAliasType schema path crashes under GraalPy, and
+        # the plain union is equivalent for schema generation.
+        ActionSequence = List[getScoreAction | getScoreMetadataAction | addNoteAction | addRestAction | addTupletAction | appendMeasureAction | deleteSelectionAction | getCursorInfoAction | goToMeasureAction | nextElementAction | prevElementAction | selectCurrentMeasureAction | insertMeasureAction | goToFinalMeasureAction | goToBeginningOfScoreAction | setTimeSignatureAction | undoAction | nextStaffAction | prevStaffAction | getVoicesAction | swapVoicesAction | setVoiceVisibilityAction]
 
         @self.mcp.tool()
         async def processSequence(sequence: ActionSequence):
