@@ -77,12 +77,6 @@ Voice notes:
 | `setStaffMute` | `staff`, `mute` | |
 | `setInstrumentSound` | `staff`, `instrumentId` | |
 
-## Export (used internally by the music21 tools)
-
-| Action | Params | Notes |
-|---|---|---|
-| `exportScore` | `path` (absolute, without extension, inside a MuseScore-allowed directory), `format` ("musicxml" or "mscz") | Writes the current score; returns `path` of the written file (extension appended). MuseScore only allows plugin writes to its data dirs and the per-user temp dir (note: the mscz writer does not work from plugins on 4.7.x); the server generates paths under `~/Documents/MuseScore4` (`MUSESCORE_MCP_DATA_DIR` overrides) and verifies the file exists. |
-
 ## Sequencing
 
 `processSequence` takes `sequence`: an array of `{action, params}` for the
@@ -91,20 +85,17 @@ getScore, getScoreMetadata, addNote, addRest, addTuplet, appendMeasure,
 deleteSelection, getCursorInfo, goToMeasure, nextElement, prevElement,
 nextStaff, prevStaff, selectCurrentMeasure, processSequence (nested),
 insertMeasure, goToFinalMeasure, goToBeginningOfScore, setTimeSignature,
-undo, getVoices, swapVoices, setVoiceVisibility, exportScore.
+undo, getVoices, swapVoices, setVoiceVisibility.
 
 Returns the state after the last action plus a full score summary.
 
-## Direct tools (not in processSequence)
-
-These are top-level MCP tools in `server.py`, not plugin actions:
+## Direct tool (not in processSequence)
 
 - `run_qml {code, params}` — executes JavaScript in the plugin. Opt-in:
   set `property allowEval: true` in `musescore-mcp-plugin.qml` and restart
   the plugin. See `docs/AGENT-COOKBOOK.md`.
-- `analyze_key {}` — music21 key analysis of the current score (exports
-  via the plugin first).
-- `harmonic_analysis {measure_start?, measure_end?}` — chordifyed
-  progression with chord names and roman numerals per measure.
-- `music_theory_query {query_type: "interval"|"chord"|"scale", ...}` —
-  stateless theory questions, no MuseScore involved.
+
+Note: there is deliberately no score export action. Plugin-side file
+writes are unreliable on MuseScore 4.7.x (see
+`.ai/VERIFIERINGSRESULTAT.md`), and the server is a pure bridge — all
+score data travels as JSON over the WebSocket.

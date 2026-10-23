@@ -17,10 +17,12 @@ The server allows an MCP-connected LLM to:
 - Work with multiple voices per staff: read a voice census, add notes in
   any voice (1-4), swap (exchange) the content of two voices, and toggle
   per-voice visibility
-- Ask general music theory questions (intervals, chords, scales) and run
-  key and harmonic analysis of the current score via music21
 - Execute whole JavaScript tasks inside the plugin (`run_qml`) for complex
   operations that would otherwise need many round trips
+
+The server is a pure bridge: all score data travels as JSON between the
+MCP client, the Python server and the QML plugin - no file exports, no
+MusicXML round trips, no analysis libraries on the server side.
 
 See `docs/ACTIONS.md` for the full action reference and
 `docs/AGENT-COOKBOOK.md` for writing `run_qml` code.
@@ -33,8 +35,9 @@ See `docs/ACTIONS.md` for the full action reference and
   MuseScore 4.7.x) and is verified per version by `dev/verify-voices.qml`
 - `run_qml` is disabled by default: edit `musescore-mcp-plugin.qml`, set
   `property allowEval: true`, and re-run the plugin. It executes arbitrary
-  code in-process on MuseScore's GUI thread (a .mscz backup is written to
-  /tmp before each run; infinite loops freeze MuseScore unrecoverably)
+  code in-process on MuseScore's GUI thread (each run is one undo step
+  with automatic rollback on error; infinite loops freeze MuseScore
+  unrecoverably)
 
 ## Development verification
 

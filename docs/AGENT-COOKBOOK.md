@@ -21,10 +21,7 @@ the open score. Read this before your first run.
   extract plain data with `ctx.processElement()` before returning.
 - The whole run is **one undo step**: if your code throws, all its changes
   are rolled back and you get `{status: "error", error, consoleLog}`.
-- A musicxml backup of the score is written inside a MuseScore-allowed
-  directory (`~/Documents/MuseScore4` by default, configurable via the
-  `MUSESCORE_MCP_DATA_DIR` environment variable) before each run
-  (reported as `backup` in the response).
+  A committed run is reverted with the undo command.
 - Errors are your friend: throw early (`throw new Error("no staff 2")`) to
   get a clean rollback instead of returning half-done work.
 

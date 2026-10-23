@@ -63,6 +63,10 @@ Pluginet körde (dispatchad som `action://extensions/v1/verify-voices.qml?action
 1. ** Hämta tskovlund/mcp-scores plugin-källkod** (src/mcp_score/musescore + bridge, GitHub): deras live-plugin-CI är grön på 4.7.5 — deras sätt att få ut partiturdata (writeScore? readScore? helt annat?) är den snabbaste vägen till ett fungerande mönster. Web-hämtningen av deras katalogstruktur påbörjades men avbröts.
 2. Om writeScore förblir trasigt — plan B (redan identifierad i F5/F11): music21-ström byggs server-side ur getScoreSummary-JSON (förlustig men genomförbar), och runCode-backup ersätts med server-side JSON-snapshot före/efter (faktiskt bättre för diff).
 
+## Slutsats 2026-10-23 (beslut F28)
+
+**writeScore-mysteriet avslutas oaktuellt utan lösning.** Efter beslutet att servern skall vara en ren brygga (F28: ingen music21, ingen partiturfils-export) kräver ingen funktion fil-export från pluginet. Faktumet kvarstår dokumenterat: `writeScore` från plugin returnerar tyst false på 4.7.5 i alla testkörningar utom körning 1, oavsett sökväg (tillåten eller ej), FileIO-inblandning och väntetid efter start. Återupptas endast om en framtida funktion verkligen behöver export — och då först med en reproducerbar setup.
+
 ## Slutsatser för implementationen (efter körning 1-3)
 
 - Röster: fullt fungerande (cursor.voice, element.voice, swap via `voice-x12`, `action://undo`).

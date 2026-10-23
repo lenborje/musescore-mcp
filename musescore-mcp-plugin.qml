@@ -13,7 +13,6 @@ MuseScore {
     property string swapCodePrefix: ""
     property bool allowEval: false
     property var codeState: ({})
-    property int runCounter: 0
     
     // Global state to track selection position
     property var selectionState: ({
@@ -73,8 +72,7 @@ MuseScore {
             "setTimeSignature",
             "getVoices",
             "swapVoices",
-            "setVoiceVisibility",
-            "exportScore"
+            "setVoiceVisibility"
         ]
 
         try {
@@ -116,8 +114,6 @@ MuseScore {
                 return swapVoices(command.params);
             case "setVoiceVisibility":
                 return setVoiceVisibility(command.params);
-            case "exportScore":
-                return exportScore(command.params);
             case "runCode":
                 return runCode(command.params);
             case "syncStateToSelection":
@@ -877,25 +873,6 @@ MuseScore {
         }
     }
 
-    // Export the current score to a file (musicxml or mscz) at an absolute
-    // path. params.path should be without extension; writeScore appends the
-    // extension and the written path is reported back.
-    function exportScore(params) {
-        if (!curScore) return { error: "No score open" };
-        if (!params || !params.path) return { error: "path is required (absolute, without extension)" };
-        var fmt = (params.format !== undefined) ? params.format : "musicxml";
-        if (fmt !== "musicxml" && fmt !== "mscz") return { error: "format must be musicxml or mscz" };
-        var base = params.path;
-        var dot = "." + fmt;
-        if (base.slice(-dot.length) === dot) base = base.slice(0, -dot.length);
-        try {
-            var ok = writeScore(curScore, base, fmt);
-            return { success: ok === true, path: base + dot, format: fmt };
-        } catch (e) {
-            return { error: e.toString() };
-        }
-    }
-
     // Context facade handed to agent code executed by runCode
     function makeRunContext(consoleLines) {
         return {
@@ -916,9 +893,8 @@ MuseScore {
     // Execute agent-provided JavaScript in the plugin (opt-in via allowEval).
     // Contract: code is a function body run as fn(ctx, params, state); the
     // return value must be JSON-serializable; the run is wrapped in one
-    // startCmd/endCmd (single undo step, rollback on error); a musicxml
-    // backup is written to the allowed temp dir before each run. state
-    // persists across runs.
+    // startCmd/endCmd (single undo step, rollback on error; a committed run
+    // is reverted with the undo command). state persists across runs.
     function runCode(params) {
         if (!curScore) return { error: "No score open" };
         if (!root.allowEval) {
@@ -929,22 +905,6 @@ MuseScore {
 
         console.log("runCode: start, codeLength=" + params.code.length
             + ", paramKeys=" + (params.params ? Object.keys(params.params).length : 0));
-
-        // Backup current score before executing foreign code. The path base
-        // comes from the server (params.backupPath, inside one of MuseScore's
-        // allowed directories); the musicxml writer is used because the mscz
-        // writer does not work from plugins.
-        var backupBase = (params.backupPath !== undefined)
-            ? params.backupPath
-            : "/tmp/musescore-mcp-runbackup-" + root.runCounter;
-        var backupPath = backupBase + ".musicxml";
-        try {
-            writeScore(curScore, backupBase, "musicxml");
-        } catch (be) {
-            console.log("runCode: backup write failed: " + be.toString());
-            return { error: "backup write failed, aborting: " + be.toString() };
-        }
-        root.runCounter++;
 
         var consoleLines = [];
         var ctx = makeRunContext(consoleLines);
@@ -960,18 +920,18 @@ MuseScore {
         } catch (e) {
             curScore.endCmd(true);
             console.log("runCode: error, rolled back: " + e.toString());
-            return { status: "error", error: e.toString(), consoleLog: consoleLines, backup: backupPath };
+            return { status: "error", error: e.toString(), consoleLog: consoleLines };
         }
         curScore.endCmd();
 
         try {
             JSON.stringify(result);
         } catch (se) {
-            return { status: "error", error: "return value is not JSON-serializable: " + se.toString(), consoleLog: consoleLines, backup: backupPath };
+            return { status: "error", error: "return value is not JSON-serializable: " + se.toString(), consoleLog: consoleLines };
         }
 
         console.log("runCode: done, ok");
-        return { status: "success", result: result, consoleLog: consoleLines, backup: backupPath };
+        return { status: "success", result: result, consoleLog: consoleLines };
     }
 
     // Per-staff, per-voice visibility

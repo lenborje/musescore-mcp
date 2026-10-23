@@ -48,19 +48,12 @@ testClient.html: röstväljare (0–3) på befintliga operationer, `getVoices`-k
 
 Acceptanskriterier: med ett partitur med två röster — `getVoices` rapporterar korrekt census; `swapVoices` byter innehåll och är ångradbart som ett steg; `addNote` med `voice: 1` hamnar i röst 2; `getCursorInfo` visar voice; gamla anrop utan voice fungerar oförändrat (bakåtkompatibilitet).
 
-## Fas 2: exportScore + music21
+## Fas 2: exportScore + music21 — UTGÅR (beslut F28, 2026-10-23)
 
-Plugin:
-- Ny action `exportScore {path, format}` → `writeScore(curScore, path, format)`. Servern genererar absolut tempfile-sökväg och skickar som parameter. Alltid heltpartitur (F13); ingen cache i v1.
-
-Server:
-- Intern hjälpfunktion: tempfile → `exportScore` via WS → `music21.converter.parse(path)` → radera fil.
-- `analyze_key()` → tonartsanalys (global + per del om de skiljer).
-- `harmonic_analysis(measure_start?, measure_end?)` → chordifyad progression per takt med ackord och romerska tal relativt analys-tonarten. Endast partiturkälla i v1 (F14).
-- `music_theory_query(query: {type: "interval"|"chord"|"scale", ...})` → stateless musikteoretiska frågor. Endast parameterkälla i v1 (F14).
-- music21 10.5.0 finns redan i `cenv/`.
-
-Acceptanskriterier: `analyze_key` returnerar korrekt tonart för ett känt partitur; `harmonic_analysis` ger progression för angivet taktintervall; fel vid stängt partitur hanteras graceful; tempfiler städas alltid (även vid fel).
+Servern skall vara en ren brygga till pluginet (F28): ingen music21, ingen
+partiturfils-export. Fas 2 är därför avslutad utan leverans och koden är
+borttagen. Se `.ai/mcp-score-analys.md` för bakgrunden och HANDOFF.md F28
+för beslutet.
 
 ## Fas 3: run_qml + dokumentation
 
