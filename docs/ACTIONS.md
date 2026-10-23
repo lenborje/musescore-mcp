@@ -75,7 +75,7 @@ Voice notes:
 |---|---|---|
 | `addInstrument` | `instrumentId` | |
 | `setStaffMute` | `staff`, `mute` | |
-| `setInstrumentSound` | `staff`, `instrumentId` | |
+| `setInstrumentSound` | `staff`, `instrumentId` | Real implementation: replaces the part's instrument with a fresh copy from the local instrument templates (`Score.replaceInstrument`). **Side effect that fixes localized mixer names**: the mixer track name (`trackName` in the file format) is re-created from the template, so tracks inherited from another user's language are renamed to the local equivalent. Pass the SAME instrumentId to only refresh the names (notes and sound kept); a different id changes transposition/clef/playback too. Reopen the score if the Mixer title does not refresh live. |
 
 ## Sequencing
 
@@ -104,3 +104,19 @@ Note: there is deliberately no score export action. Plugin-side file
 writes are unreliable on MuseScore 4.7.x (see
 `.ai/VERIFIERINGSRESULTAT.md`), and the server is a pure bridge — all
 score data travels as JSON over the WebSocket.
+
+## Mixer track names (known MuseScore limitation)
+
+The name the Mixer shows per track (`trackName`, stored per instrument in
+the file format) is created from the instrument template when the
+instrument is added - localized to the *creating* user's language. A
+score downloaded from another user can therefore show mixer tracks in
+that user's language, and neither MuseScore's GUI nor the plugin API
+can set this name directly (`Part.partName`, `Instrument.trackName` and
+`Channel.name` are all read-only in the plugin API).
+
+The one working path is `setInstrumentSound`: replacing the instrument
+re-creates it from the *running* user's local templates, which resets
+the track name to the local language. Truly custom (non-template)
+track names require editing the `<trackName>` element in the `.mscx`
+inside the `.mscz` file offline - not possible through the live bridge.

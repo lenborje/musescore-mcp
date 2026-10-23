@@ -1705,22 +1705,48 @@ MuseScore {
     // Change instrument sound - TBD
     function setInstrumentSound(params) {
         if (!curScore) return { error: "No score open" };
-        
+
         if (params.staff === undefined) return { error: "No staff specified" };
         if (!params.instrumentId) return { error: "No instrument ID specified" };
-        
-        // This is a placeholder - implementation depends on MuseScore 4's API
-        // Start command for undo
+
+        // Map staff index -> Part (a part owns the staff range
+        // startTrack/VOICES .. endTrack/VOICES-1).
+        var parts = curScore.parts;
+        var target = null;
+        for (var i = 0; i < parts.length; i++) {
+            var p = parts[i];
+            var startStaff = p.startTrack / 4;
+            var endStaff = p.endTrack / 4 - 1;
+            if (params.staff >= startStaff && params.staff <= endStaff) {
+                target = p;
+                break;
+            }
+        }
+        if (!target) return { error: "No part owns staff " + params.staff };
+
+        var beforePartName = target.partName;
+        var beforeInstrumentId = target.instrumentId;
+
         curScore.startCmd();
-        
         try {
-            // Try to trigger instrument change through command
-            cmd("instruments");
-            
+            // Replaces the part's instrument with a fresh copy from the
+            // RUNNING user's instrument templates. Side effect that matters:
+            // the mixer track name (Instrument::trackName) is re-created
+            // from the template, so localized names inherited from another
+            // user's language (e.g. a downloaded score showing the original
+            // creator's localized instrument name) are replaced by the
+            // local-language equivalent. Replacing with
+            // the same instrumentId keeps notes and sound but re-reads the
+            // names. Note: changing to a different instrument also changes
+            // transposition, clef and playback setup.
+            curScore.replaceInstrument(target, params.instrumentId);
             curScore.endCmd();
-            return { 
-                success: true, 
-                message: "Instrument dialog opened, manual selection required" 
+            return {
+                success: true,
+                staff: params.staff,
+                before: { partName: beforePartName, instrumentId: beforeInstrumentId },
+                after: { partName: target.partName, instrumentId: target.instrumentId },
+                note: "Mixer track name re-created from the local instrument template; reopen the score if the Mixer title does not refresh live"
             };
         } catch (e) {
             curScore.endCmd(true); // Rollback on error
@@ -1832,8 +1858,11 @@ MuseScore {
                         shortName: staff.shortName || "",
                         visible: !staff.invisible
                     };
-                    // Try to get instrument name
+                    // Try to get instrument name and part name
                     try {
+                        if (staff.part && staff.part.partName) {
+                            staffInfo.partName = staff.part.partName;
+                        }
                         if (staff.part && staff.part.instrumentName) {
                             staffInfo.instrument = staff.part.instrumentName;
                         } else if (staff.instrumentName) {
@@ -2001,6 +2030,9 @@ MuseScore {
                     staffInfo.shortName = staff.shortName || "";
                     staffInfo.visible = !staff.invisible;
                     try {
+                        if (staff.part && staff.part.partName) {
+                            staffInfo.partName = staff.part.partName;
+                        }
                         if (staff.part && staff.part.instrumentName) {
                             staffInfo.instrument = staff.part.instrumentName;
                         } else if (staff.instrumentName) {
