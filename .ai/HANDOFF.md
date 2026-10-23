@@ -6,9 +6,12 @@ Dokumentet är sessionsöverskridande kontext. Läs detta + `ARBETSPLAN.md` + `V
 
 **Helhetstet GRÖNT (10/10)** — den rena bryggan är runtime-verifierad: `dev/bridge-smoke-test.py` kördes mot öppet testpartitur med F28-pluginen: röst-census, verifierad röstväxling, verifierad undo-återställning, runCode-grind, processSequence. Fas 0 är stängd (se VERIFIERINGSRESULTAT.md), F28 genomförd, versionsmedveten undo på plats.
 
+**run_qml är nu helhetsverifierad (8/8)** — `dev/run-qml-test.py`: eval, ctx-fasad + consoleLog, ctx.processCommand, beständig state (överlever till och med pluginomstarter), rollback vid kast (pitchverifierad), committad mutation + undo (60→72→60), cookbook-traverseringen. Runtime-fakta tillagda i cookbooken: `addNote` på belagd position ERSÄTTER noten (verifiera pitch, inte antal).
+
 Projektets kvarvarande backlog (medvetet uppskjutet, se ARBETSPLAN "Efter fas 3"):
+- **setInstrumentSound/mixer: empirisk verifiering** — på ett partitur med främdspråkiga spårnamn: blir namnet lokalt, och uppdaterar Mixern live eller kräver omladdning?
 - Atomisk processSequence (ett undo-steg för hela batchen) — kräver refactor av alla actions till apply/commit-par + runtime-verifiering.
-- Kuratering av återkommande run_qml-uppgifter till stabila actions (F20) — efter verklig användning.
+- Kuratering av återkommande run_qml-uppgifter till stabila actions (F20) — efter verklig användning (användarens egna plugin CopyLyrics.qml, FillRepeatedLyrics.qml, CantaiSvengelska/Tyska är naturliga första kandidater).
 - Ev. röstnavigerings-förbättringar (F3:S "ingen state-full röstnavigering" kan omprövas om agenterna visar behov).
 
 Kända runtime-fakta: se tabellen i VERIFIERINGSRESULTAT.md (V1–V21). Viktigast: swap = `cmd("voice-x12")`, undo = `cmd("action://undo")`, eval fungerar, `setVoiceVisible` returvärdet oanvändbart, FileIO-skrivningar blockeras — **använd aldrig FileIO i plugin**, delete via cmd assertar (deleteSelection verifierar ärligt), console.log från meny-körda plugins kastas bort (använd api.log.info + MuseScores loggfil).
