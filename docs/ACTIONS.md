@@ -56,6 +56,34 @@ Voice notes:
 - `getScore`/`getScoreSummary` walk **all four voices** of every staff;
   every element carries `voice` and `staffIdx`.
 
+## Chord symbols (Harmony)
+
+`getScore` includes `harmonies: []` in each measure, separate from the
+existing note/rest `elements` and `numElements`. Each symbol has `name:
+"Harmony"`, `text` (MuseScore's editable text), `harmonyType` (0 standard,
+1 Roman numeral, 2 Nashville), `staffIdx`, `voice`, absolute `startTick`,
+1-based `measure`, and `index` (0-based among Harmony annotations on the
+same segment and track). Segment annotations are scanned once, so symbols
+are included even where staff 0 has no note, without duplication per voice.
+
+| Action | Params | Notes |
+|---|---|---|
+| `getHarmonies` | `staff`, `startTick`, `endTick` (all optional) | Returns `{success, harmonies}`; tick interval is start-inclusive, end-exclusive. Reads inscribed symbols, without inferring chords from notes. |
+| `setHarmony` | `staff`, `startTick`, `text` (required); `voice` (default 0), `harmonyType`, `index` (optional) | Updates an existing symbol at the exact staff/voice/tick, or creates one if absent. New symbols require an existing chord/rest at that exact position; never silently snaps to a later note. Multiple symbols at the same position require `index` from the reader. Omitting `harmonyType` preserves the existing type; new symbols default to standard. Returns `{success, created, harmony}`. One undo step; exceptions roll back. |
+
+Example through `processSequence`:
+
+```json
+{"sequence": [
+  {"action": "getHarmonies", "params": {"staff": 0}},
+  {"action": "setHarmony", "params": {"staff": 0, "startTick": 480, "text": "C7/E"}}
+]}
+```
+
+The symbol text is interpreted by MuseScore's own Harmony parser and chord
+style. It may normalize the representation. This action does not change
+notes, and does not support deleting symbols or fretboard-diagram children.
+
 ## Notes & measures
 
 | Action | Params | Notes |
@@ -85,9 +113,11 @@ getScore, getScoreMetadata, addNote, addRest, addTuplet, appendMeasure,
 deleteSelection, getCursorInfo, goToMeasure, nextElement, prevElement,
 nextStaff, prevStaff, selectCurrentMeasure, processSequence (nested),
 insertMeasure, goToFinalMeasure, goToBeginningOfScore, setTimeSignature,
-undo, getVoices, swapVoices, setVoiceVisibility.
+undo, getVoices, swapVoices, setVoiceVisibility, getHarmonies, setHarmony.
 
 Returns the state after the last action plus a full score summary.
+The additive `results` array contains each action's return value in sequence
+order, including filtered `getHarmonies` results.
 
 Undo semantics: each action is its own undo step. A sequence that fails
 halfway leaves earlier actions committed (each revertible with `undo`).

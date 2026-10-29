@@ -263,10 +263,31 @@ class MuseScoreMCP:
             action: Literal["setVoiceVisibility"]
             params: setVoiceVisibilityParams
 
+        class getHarmoniesParams(TypedDict, total=False):
+            staff: int
+            startTick: int
+            endTick: int
+
+        class getHarmoniesAction(TypedDict):
+            action: Literal["getHarmonies"]
+            params: getHarmoniesParams
+
+        class setHarmonyParams(TypedDict):
+            staff: int
+            startTick: int
+            text: str
+            voice: NotRequired[int]
+            harmonyType: NotRequired[int]
+            index: NotRequired[int]
+
+        class setHarmonyAction(TypedDict):
+            action: Literal["setHarmony"]
+            params: setHarmonyParams
+
         # Classic alias assignment instead of a PEP 695 `type` statement:
         # pydantic's TypeAliasType schema path crashes under GraalPy, and
         # the plain union is equivalent for schema generation.
-        ActionSequence = List[getScoreAction | getScoreMetadataAction | addNoteAction | addRestAction | addTupletAction | appendMeasureAction | deleteSelectionAction | getCursorInfoAction | goToMeasureAction | nextElementAction | prevElementAction | selectCurrentMeasureAction | insertMeasureAction | goToFinalMeasureAction | goToBeginningOfScoreAction | setTimeSignatureAction | undoAction | nextStaffAction | prevStaffAction | getVoicesAction | swapVoicesAction | setVoiceVisibilityAction]
+        ActionSequence = List[getScoreAction | getScoreMetadataAction | addNoteAction | addRestAction | addTupletAction | appendMeasureAction | deleteSelectionAction | getCursorInfoAction | goToMeasureAction | nextElementAction | prevElementAction | selectCurrentMeasureAction | insertMeasureAction | goToFinalMeasureAction | goToBeginningOfScoreAction | setTimeSignatureAction | undoAction | nextStaffAction | prevStaffAction | getVoicesAction | swapVoicesAction | setVoiceVisibilityAction | getHarmoniesAction | setHarmonyAction]
 
         @self.mcp.tool()
         async def processSequence(sequence: ActionSequence):

@@ -79,3 +79,19 @@ Pluginet körde (dispatchad som `action://extensions/v1/verify-voices.qml?action
 - `setVoiceVisible`: returvärde falskt men anropet kastar inte — rapportera `success: true` utan att lita på returen.
 - `deleteSelection`: ärlig verifiering; radering via cmd opålitlig på 4.7.x.
 - Opt-in (`allowEval`), try-lista för swap-koder och `action://`-koder: implementerade enligt ovan.
+
+## Harmony — liveverifiering 2026-10-29 (MuseScore 4.7.6)
+
+`venv/bin/python dev/harmony-live-test.py --write`: samtliga kontroller gröna
+efter full MuseScore-omstart. Öppet fyrstämmigt partitur med 21 takter:
+
+- 20 Harmony-symboler lästa, en per takt 2–21, inklusive `Am/F`.
+- `getScore.measures[].harmonies`, `getHarmonies` och filtrerad läsning via
+  `processSequence.results` överensstämmer.
+- Befintligt ackord ändrat till slashackord och återställt med undo.
+- Nytt `C7/E` skapat på ledig position och återställt med undo.
+- Hela partituravläsningens JSON identisk med baslinjen efter varje undo.
+- Ogiltig exakt tickposition avvisad utan ändringar.
+
+JS-regression `node dev/harmony-test.js`: 6/6 grönt. GraalPy MCP-schemat
+registrerar båda actions och behåller totalt sju verktyg.

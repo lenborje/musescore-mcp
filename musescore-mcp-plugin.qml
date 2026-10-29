@@ -11,7 +11,7 @@ MuseScore {
     property var clientConnections: []
     property int currentVoice: 0
     property string swapCodePrefix: ""
-    property bool allowEval: false
+    property bool allowEval: true
     property var codeState: ({})
     
     // Global state to track selection position
@@ -53,6 +53,8 @@ MuseScore {
         var validCommands = [
             "getScore",
             "getScoreMetadata",
+            "getHarmonies",
+            "setHarmony",
             "addNote",
             "addRest",
             "addTuplet",
@@ -76,12 +78,13 @@ MuseScore {
         ]
 
         try {
+            var results = [];
             // process commands in order
             for (var i = 0; i < params.sequence.length; i++) {
                 if (!validCommands.includes(params.sequence[i].action)) {
                     throw new Error("Invalid command: " + params.sequence[i].action + " Valid commands: " + validCommands.join(", "));
                 }
-                processCommand(params.sequence[i]);
+                results.push(processCommand(params.sequence[i]));
             }
 
             // Try to get score summary, but don't let it break the response
@@ -93,7 +96,7 @@ MuseScore {
             }
 
             ensureVoiceInSelectionState();
-            return { success: true, message: "Sequence processed", currentSelection: selectionState, currentScore: scoreSummary };
+            return { success: true, message: "Sequence processed", results: results, currentSelection: selectionState, currentScore: scoreSummary };
         } catch (e) {
             ensureVoiceInSelectionState();
             return { error: e.toString(), currentSelection: selectionState };
@@ -108,6 +111,10 @@ MuseScore {
                 return getScore(command.params);
             case "getScoreMetadata":
                 return getScoreMetadata(command.params);
+            case "getHarmonies":
+                return getHarmonies(command.params);
+            case "setHarmony":
+                return setHarmony(command.params);
             case "getVoices":
                 return getVoices(command.params);
             case "swapVoices":
@@ -483,7 +490,14 @@ MuseScore {
         var durDots = (element.durationType && element.durationType.dots !== undefined) ? element.durationType.dots : 0;
         var durTicks = (element.actualDuration && element.actualDuration.ticks !== undefined) ? element.actualDuration.ticks : 0;
 
-        if (name == "Note") {
+        if (element.type === Element.HARMONY) {
+            processedElement = {
+                name: "Harmony", text: element.text, harmonyType: element.harmonyType,
+                staffIdx: element.staffIdx, voice: element.track % 4, durationTicks: 0
+            };
+        }
+
+        else if (name == "Note") {
             processedElement = {
                 voice: (element.voice !== undefined ? element.voice : null),
                 staffIdx: (element.staffIdx !== undefined ? element.staffIdx : null),
@@ -715,6 +729,116 @@ MuseScore {
         return idx;
     }
 
+    // Harmony annotations are independent of the notes in a cursor's track.
+    function harmonyData(element, tick, measure, index) {
+        return {
+            name: "Harmony", text: element.text,
+            harmonyType: element.harmonyType,
+            staffIdx: element.staffIdx, voice: element.track % 4,
+            startTick: tick, measure: measure, index: index
+        };
+    }
+
+    function validateHarmonyInteger(value, label, min, max) {
+        if (typeof value !== "number" || !isFinite(value) || Math.floor(value) !== value
+                || value < min || value > max)
+            throw new Error(label + " must be an integer between " + min + " and " + max);
+    }
+
+    // Walk segments once, including annotations on positions with no note in staff 0.
+    function harmonyEntries() {
+        var boundaries = measureBoundaries();
+        var entries = [];
+        for (var seg = curScore.firstSegment(); seg; seg = seg.next) {
+            var indices = {};
+            var annotations = seg.annotations;
+            for (var i = 0; annotations && i < annotations.length; i++) {
+                var ann = annotations[i];
+                if (ann.type !== Element.HARMONY) continue;
+                var key = String(ann.track);
+                var index = indices[key] || 0;
+                indices[key] = index + 1;
+                entries.push({element: ann, data: harmonyData(ann, seg.tick,
+                    measureIndexForTick(boundaries, seg.tick) + 1, index)});
+            }
+        }
+        return entries;
+    }
+
+    function getHarmonies(params) {
+        if (!curScore) throw new Error("No score open");
+        params = params || {};
+        if (params.staff !== undefined)
+            validateHarmonyInteger(params.staff, "staff", 0, curScore.nstaves - 1);
+        if (params.startTick !== undefined)
+            validateHarmonyInteger(params.startTick, "startTick", 0, 2147483647);
+        if (params.endTick !== undefined)
+            validateHarmonyInteger(params.endTick, "endTick", 0, 2147483647);
+        if (params.startTick !== undefined && params.endTick !== undefined && params.endTick < params.startTick)
+            throw new Error("endTick must be >= startTick");
+        return {success: true, harmonies: harmonyEntries().map(function(entry) { return entry.data; })
+            .filter(function(h) {
+                return (params.staff === undefined || h.staffIdx === params.staff)
+                    && (params.startTick === undefined || h.startTick >= params.startTick)
+                    && (params.endTick === undefined || h.startTick < params.endTick);
+            })};
+    }
+
+    // Upsert one symbol at an exact existing chord/rest position. Never snap forward.
+    function setHarmony(params) {
+        if (!curScore) throw new Error("No score open");
+        params = params || {};
+        validateHarmonyInteger(params.staff, "staff", 0, curScore.nstaves - 1);
+        validateHarmonyInteger(params.startTick, "startTick", 0, 2147483647);
+        var voice = params.voice === undefined ? 0 : params.voice;
+        validateHarmonyInteger(voice, "voice", 0, 3);
+        if (typeof params.text !== "string" || !params.text.trim())
+            throw new Error("text must be a non-empty chord symbol string");
+        if (params.harmonyType !== undefined)
+            validateHarmonyInteger(params.harmonyType, "harmonyType", 0, 2);
+        if (params.index !== undefined)
+            validateHarmonyInteger(params.index, "index", 0, 2147483647);
+        var matches = harmonyEntries().filter(function(entry) {
+            var h = entry.data;
+            return h.staffIdx === params.staff && h.voice === voice && h.startTick === params.startTick;
+        });
+        if (matches.length > 1 && params.index === undefined)
+            throw new Error("Multiple harmonies at this position; specify index from getHarmonies");
+        var index = params.index === undefined ? 0 : params.index;
+        if (index >= matches.length && (matches.length || index !== 0))
+            throw new Error("Harmony index does not exist");
+        var existing = matches.length ? matches[index].element : null;
+        var cursor = curScore.newCursor();
+        cursor.inputStateMode = Cursor.INPUT_STATE_INDEPENDENT;
+        cursor.staffIdx = params.staff;
+        cursor.voice = voice;
+        cursor.rewind(0);
+        while (cursor.segment && cursor.tick < params.startTick) {
+            if (!cursor.next()) break;
+        }
+        if (!existing && (!cursor.segment || cursor.tick !== params.startTick || !cursor.element))
+            throw new Error("No chord/rest at exact staff, voice and startTick");
+        curScore.startCmd();
+        var result;
+        try {
+            var harmony = existing;
+            if (!harmony) {
+                harmony = newElement(Element.HARMONY);
+                cursor.add(harmony);
+            }
+            if (params.harmonyType !== undefined) harmony.harmonyType = params.harmonyType;
+            // Set text after attaching: MuseScore's harmony parser needs a parent segment.
+            harmony.text = params.text;
+            result = harmonyData(harmony, params.startTick,
+                measureIndexForTick(measureBoundaries(), params.startTick) + 1, index);
+        } catch (e) {
+            curScore.endCmd(true);
+            throw e;
+        }
+        curScore.endCmd();
+        return {success: true, created: !existing, harmony: result};
+    }
+
     // Voice census per staff: which voices carry content and where
     function getVoices(params) {
         if (!curScore) return { error: "No score open" };
@@ -724,16 +848,19 @@ MuseScore {
             var startStaff = (params.startStaff !== undefined) ? params.startStaff : 0;
             var endStaff = (params.endStaff !== undefined) ? params.endStaff : curScore.nstaves - 1;
             var boundaries = measureBoundaries();
-            var cursor = curScore.newCursor();
-            cursor.inputStateMode = Cursor.INPUT_STATE_INDEPENDENT;
             var staves = [];
 
             for (var s = startStaff; s <= endStaff && s < curScore.nstaves; s++) {
                 var voices = [];
                 for (var v = 0; v < 4; v++) {
-                    cursor.rewind(0);
+                    // Fresh independent cursor per staff/voice; track set BEFORE
+                    // rewind(0), which positions within the current track
+                    // (verified pattern: dev/verify-voices.qml).
+                    var cursor = curScore.newCursor();
+                    cursor.inputStateMode = Cursor.INPUT_STATE_INDEPENDENT;
                     cursor.staffIdx = s;
                     cursor.voice = v;
+                    cursor.rewind(0);
                     var count = 0, firstMeasure = null, lastMeasure = null;
                     while (true) {
                         var e = cursor.element;
@@ -768,9 +895,11 @@ MuseScore {
     function voiceRangeSnapshot(staff, voice, startTick, endTick) {
         var cursor = curScore.newCursor();
         cursor.inputStateMode = Cursor.INPUT_STATE_INDEPENDENT;
-        cursor.rewind(0);
+        // Track before rewind: rewind(0) positions within the current track
+        // (verified pattern: dev/verify-voices.qml).
         cursor.staffIdx = staff;
         cursor.voice = voice;
+        cursor.rewind(0);
         var count = 0, firstPitch = null;
         while (true) {
             if (cursor.tick >= endTick) break;
@@ -1892,7 +2021,8 @@ MuseScore {
                 var measure = {
                     measure: i+1, 
                     startTick: 0,
-                    numElements: 0, 
+                    numElements: 0,
+                    harmonies: [],
                     elements: {}
                 };
 
@@ -1919,12 +2049,15 @@ MuseScore {
                 // walk all four voices of this staff
                 for (var v = 0; v < 4; v++) {
 
-                // rewind cursor to beginning of selection
-                cursor.rewind(0);
-
-                // go to relevant staff and voice
+                // Fresh independent cursor per staff/voice. The track must be set
+                // BEFORE rewind(0): rewind positions within the current track, so
+                // setting staff/voice after it never takes effect (verified
+                // pattern: dev/verify-voices.qml, docs/AGENT-COOKBOOK.md).
+                cursor = curScore.newCursor();
+                cursor.inputStateMode = Cursor.INPUT_STATE_INDEPENDENT;
                 cursor.staffIdx = k;
                 cursor.voice = v;
+                cursor.rewind(0);
 
                 // walk through the elements
 
@@ -1935,10 +2068,10 @@ MuseScore {
                     var measureIdx = measureBoundaries.filter(tick => tick <= cursor.tick).length - 1;
                     if (measureIdx < 0) measureIdx = 0;
 
-                    // process element, add to measure and increment count
-                    score.measures[measureIdx].numElements++;
-
                     if (element) {
+                        // process element, add to measure and increment count
+                        score.measures[measureIdx].numElements++;
+
                         try {
                             var processedElement = processElement(element);
                             processedElement.startTick = cursor.tick;
@@ -1960,6 +2093,13 @@ MuseScore {
 
                 }
 
+            }
+
+            // Keep annotation data separate from the existing note/rest arrays.
+            var harmonies = getHarmonies({}).harmonies;
+            for (var h = 0; h < harmonies.length; h++) {
+                var hm = harmonies[h].measure - 1;
+                score.measures[hm].harmonies.push(harmonies[h]);
             }
 
             // Reset cursor state

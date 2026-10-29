@@ -129,9 +129,11 @@ return out;
 ```
 
 Lyrics hang on chords/rests (`el.lyrics`), not on individual notes.
-`plainText` is read-only — the plugin API does not expose a lyric text
-setter in MuseScore 4.7; to "write" lyrics you must recreate the element
-or propose the new text and let another action apply it.
+`plainText` is read-only. Write through the inherited `text` property,
+which contains formatted text: `lyric.text = lyric.text.normalize("NFC")`.
+This preserves markup while composing decomposed Unicode characters such
+as `a` + combining ring into `å` (runtime-verified on MuseScore 4.7.6).
+Use `text` rather than `plainText` as the source when preserving formatting.
 
 ## Example 2: transform score text (title / meta tags)
 

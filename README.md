@@ -9,6 +9,8 @@ Brief demo here: https://www.canva.com/design/DAGlHeR706g/4UcXvK23I1axWOfm6lSSxQ
 The server allows an MCP-connected LLM to:
 
 - Connect to MuseScore and manipulate an open score
+- Read and write chord symbols (Harmony), including slash chords, via
+  `getHarmonies` and `setHarmony`; score summaries include symbols per measure
 - Add notes and rests
 - Select and delete
 - Create tuplets
@@ -33,8 +35,10 @@ See `docs/ACTIONS.md` for the full action reference and
   voices are addressed by parameter (index 0-3), not traversed
 - Voice swap depends on undocumented command codes (`voice-xNN` in
   MuseScore 4.7.x) and is verified per version by `dev/verify-voices.qml`
-- `run_qml` is disabled by default: edit `musescore-mcp-plugin.qml`, set
-  `property allowEval: true`, and re-run the plugin. It executes arbitrary
+- `run_qml` is controlled by `allowEval` in `musescore-mcp-plugin.qml`.
+  This checkout has it enabled at the user's request; set
+  `property bool allowEval: false` to disable it. Fully restart MuseScore
+  after changing this setting. It executes arbitrary
   code in-process on MuseScore's GUI thread (each run is one undo step
   with automatic rollback on error; infinite loops freeze MuseScore
   unrecoverably)
@@ -46,6 +50,12 @@ See `docs/ACTIONS.md` for the full action reference and
 check voice-swap command codes, score export, eval support and the cursor
 voice API on the installed MuseScore version. Results go to MuseScore's
 plugin console; exports land in /tmp.
+
+Harmony regression checks: `node dev/harmony-test.js`. Live checks:
+`venv/bin/python dev/harmony-live-test.py` (read-only), or add `--write` to
+verify edits and their undo restoration. After changing the
+plugin, fully quit and restart MuseScore, then start the API Server plugin
+again; MuseScore caches plugin QML for the lifetime of its process.
 
 ## Requirements
 
