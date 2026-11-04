@@ -1,0 +1,50 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Install
+        run: pip install -e .
+      - name: Tool count check
+        run: |
+          python - <<'EOF'
+          import asyncio
+          from musescore_mcp.server import MuseScoreMCP
+          tools = asyncio.run(MuseScoreMCP().mcp.list_tools())
+          print([t.name for t in tools])
+          assert len(tools) == 7, f"expected 7 tools, got {len(tools)}"
+          EOF
+      - name: CLI smoke test
+        run: |
+          musescore-mcp --help
+          musescore-mcp doctor
+          musescore-mcp docs cookbook | head -3
+          musescore-mcp install-plugin --dry-run --allow-eval
+      - name: Offline JS regression
+        run: |
+          node dev/harmony-test.js
+          node dev/plugin-regression-test.js
+          node dev/test-client-test.js
+      - name: Bridge, archive and real MCP stdio regressions
+        run: python -m unittest discover -s tests -v
+      - name: Build distributions
+        run: |
+          pip install build
+          python -m build
+      - uses: actions/upload-artifact@v7
+        with:
+          name: dist-${{ matrix.python-version }}
+          path: dist/

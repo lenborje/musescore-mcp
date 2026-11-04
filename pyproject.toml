@@ -1,0 +1,46 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "musescore-mcp"
+version = "1.0.1"
+description = "MCP server bridging AI agents to MuseScore Studio 4 (pure WebSocket bridge to a MuseScore plugin)"
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+requires-python = ">=3.12"
+dependencies = [
+    "mcp>=1.2.0,<2",  # pinned: mcp 2.x renames FastMCP - do not remove the pin
+    "websockets>=15.0",
+]
+authors = [
+    { name = "Lennart Borjeson" },
+]
+keywords = ["mcp", "model-context-protocol", "musescore", "music", "notation"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Multimedia :: Sound/Audio",
+]
+
+[project.urls]
+Homepage = "https://github.com/lenborje/musescore-mcp"
+Issues = "https://github.com/lenborje/musescore-mcp/issues"
+
+[project.scripts]
+musescore-mcp = "musescore_mcp.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/musescore_mcp"]
+
+# Ship the plugin and the docs inside the wheel, version-locked with the
+# server. The CLI resolves them via importlib.resources; a repo checkout
+# falls back to the repository root (see musescore_mcp/assets.py).
+[tool.hatch.build.targets.wheel.force-include]
+"musescore-mcp-plugin.qml" = "musescore_mcp/assets/musescore-mcp-plugin.qml"
+"docs" = "musescore_mcp/assets/docs"

@@ -1,0 +1,17 @@
+env
+testscore.mscz
+.mscbackup
+venv/
+cenv/
+__pycache__/
+*.autosave
+build/
+dist/
+*.egg-info/
+.bak
+# Internal cross-session working notes (private; never publish or package).
+# Symlink to ~/Documents/musescore-mcp/.ai (iCloud-synced, machine-local link).
+.ai
+
+# Session-private agent working directory (per-machine; never publish, never package).
+rewrite/
