@@ -19,12 +19,12 @@ MuseScore {
     menuPath: "Plugins.MuseScore API Server"
     requiresScore: false
     description: "Exposes MuseScore API via WebSocket"
-    version: "1.0.1"
+    version: "1.0.2"
 
     // Handshake value: the Python server compares it with its own version
     // in the ping reply and flags a mismatch (fix: musescore-mcp
     // install-plugin, then restart MuseScore and relaunch the plugin).
-    property string pluginVersion: "1.0.1"
+    property string pluginVersion: "1.0.2"
 
     // If set at install time, the runCode action can execute arbitrary
     // JavaScript in-process (musescore-mcp install-plugin --allow-eval).
