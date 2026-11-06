@@ -10,67 +10,185 @@ version-locked with the server.
 
 ## Step 1: Python environment
 
-Install the package. PyPI publication is pending - until then, install
-straight from the GitHub repository. Prefer `pipx` or `uv` so the server
-gets its own isolated environment (they fetch a suitable Python
-automatically):
+These instructions cover macOS, Linux and native Windows (PowerShell).
+Native MuseScore integration has so far been tested on macOS only.
+Install Python 3.12+ and MuseScore Studio 4.4.2+; the native regression
+baseline is MuseScore 4.7.6. Use a regular desktop MuseScore installation.
+On Windows, run the bridge in native Windows too; WSL is a separate
+environment and its localhost/filesystem need additional configuration.
 
-```bash
-pipx install git+https://github.com/lenborje/musescore-mcp.git
-# or: uv tool install git+https://github.com/lenborje/musescore-mcp.git
+PyPI publication is pending. Installation from this repository requires
+Git on PATH. Prefer one isolated installation:
+
+```sh
+uv tool install --python 3.12 git+https://github.com/lenborje/musescore-mcp.git
+uv tool update-shell
 ```
 
-If neither is available, use pip into a dedicated venv (Python 3.12+):
+uv can download the requested Python. Alternatively, with Python 3.12+
+already available:
 
-```bash
-python3 -m venv ~/.musescore-mcp-venv
-~/.musescore-mcp-venv/bin/pip install git+https://github.com/lenborje/musescore-mcp.git
+```sh
+pipx install --python python3.12 git+https://github.com/lenborje/musescore-mcp.git
+pipx ensurepath
 ```
 
-(From a source checkout instead: `pip install -e <REPO>` - the rest is
-identical, with the `musescore-mcp` executable under the venv's `bin/`.)
+On Windows, replace `python3.12` with the full path to a Python 3.12+
+`python.exe` (find installed interpreters with `py -0p`). pipx uses that
+interpreter; do not assume it downloads Python. Reopen the terminal after
+updating PATH. See [uv installation](https://docs.astral.sh/uv/getting-started/installation/)
+or [pipx installation](https://pipx.pypa.io/stable/installation/)
+if the chosen tool is missing.
 
-Sanity-check the installation:
+A dedicated venv also works, without activation. macOS/Linux:
 
-```bash
+```sh
+python3 -m venv "$HOME/.musescore-mcp-venv"
+"$HOME/.musescore-mcp-venv/bin/python" -m pip install git+https://github.com/lenborje/musescore-mcp.git
+"$HOME/.musescore-mcp-venv/bin/musescore-mcp" doctor
+```
+
+Ensure `python3 --version` is 3.12 or newer first. Windows PowerShell:
+
+```powershell
+py -3.12 -m venv "$HOME/.musescore-mcp-venv"
+& "$HOME/.musescore-mcp-venv/Scripts/python.exe" -m pip install git+https://github.com/lenborje/musescore-mcp.git
+& "$HOME/.musescore-mcp-venv/Scripts/musescore-mcp.exe" doctor
+```
+
+Use another installed 3.12+ version in place of `-3.12` if needed.
+For a source checkout, replace the pip install source with `-e .` while
+in the repository. All commands below use `musescore-mcp` as shorthand:
+with a venv, substitute its full executable path as above, including
+PowerShell's `&` when invoking a quoted path. No activation is required.
+
+For uv/pipx installs, check:
+
+```sh
 musescore-mcp doctor
 ```
 
-It must report 7 MCP tools and no `[FAIL]` lines. (The plugin warning is
-expected at this point - you install it next.)
+It must report seven MCP tools and no `[FAIL]` lines. A missing-plugin
+warning and an unreachable live-plugin message are expected before step 2.
+An exit status of zero checks the Python setup; it does not prove a live
+MuseScore connection. Complete step 4 too.
+
+Alternatively, run without a persistent tool installation (uv caches an
+isolated environment):
+
+```sh
+uvx --python 3.12 --from git+https://github.com/lenborje/musescore-mcp.git musescore-mcp doctor
+```
+
+For this variant, replace every `musescore-mcp` invocation below with
+that full prefix, changing only the final subcommand/arguments. Register
+`uvx` with the arguments shown in step 3. The MuseScore plugin still
+needs to be copied in step 2.
 
 ## Step 2: MuseScore plugin
 
-```bash
+Check the plugin folder in MuseScore **Preferences > General > Folders**
+(on macOS, open Preferences/Settings from the application menu). The
+installer uses the OS Documents folder plus `MuseScore4/Plugins`:
+
+| Platform | Usual default | Discovery |
+|---|---|---|
+| macOS | `~/Documents/MuseScore4/Plugins` | Home Documents folder |
+| Linux | `~/Documents/MuseScore4/Plugins` | Documents from `$XDG_CONFIG_HOME/user-dirs.dirs` (default `~/.config`), otherwise `~/Documents` |
+| Windows | `C:/Users/<user>/Documents/MuseScore4/Plugins` | Windows Known Folder API; follows redirected Documents, including OneDrive; falls back to home/Documents if unavailable |
+
+MuseScore can use a custom plugin folder. Its custom preference is not
+read automatically. For such a folder, pass the same `--plugin-dir` to
+installation, upgrades and doctor. Example (quoted paths work with spaces):
+
+```sh
+musescore-mcp install-plugin --plugin-dir "/path/to/MuseScore plugins" --dry-run
+musescore-mcp install-plugin --plugin-dir "/path/to/MuseScore plugins"
+musescore-mcp doctor --plugin-dir "/path/to/MuseScore plugins"
+```
+
+Windows PowerShell example:
+
+```powershell
+musescore-mcp install-plugin --plugin-dir "C:/Users/Alice/OneDrive/Documents/MuseScore4/Plugins" --dry-run
+musescore-mcp install-plugin --plugin-dir "C:/Users/Alice/OneDrive/Documents/MuseScore4/Plugins"
+musescore-mcp doctor --plugin-dir "C:/Users/Alice/OneDrive/Documents/MuseScore4/Plugins"
+```
+
+If the discovered folder matches MuseScore, omit `--plugin-dir`:
+
+```sh
+musescore-mcp install-plugin --dry-run
 musescore-mcp install-plugin
 ```
 
-This copies the bundled plugin into MuseScore's user plugins directory
-and prints the target path (macOS: `~/Documents/MuseScore4/Plugins/`).
-The command backs up any existing installed copy as
-`musescore-mcp-plugin.qml.bak`.
+Alternatively set `MUSESCORE_MCP_PLUGIN_DIR` in the environment of these
+commands. Precedence: command-line flag, environment variable, OS default.
+POSIX: `export MUSESCORE_MCP_PLUGIN_DIR="/path/to/plugins"`;
+PowerShell: `$env:MUSESCORE_MCP_PLUGIN_DIR = "C:/path/to/plugins"`.
+The flag is not remembered between invocations, and neither option changes
+MuseScore's own preference. The bridge itself does not need this variable.
 
-Then tell the user to do the two steps only a human can do in the GUI:
-1. MuseScore: Plugins > Manage plugins, enable "MuseScore API Server".
-2. Each session: Plugins > MuseScore API Server (the plugin starts a
-   WebSocket server on port 8765 and must be launched after MuseScore
-   opens a score). The client uses localhost, but MuseScore binds all
-   network interfaces without authentication; use the host/network
-   firewall to restrict access where needed. The QML wrapper cannot
-   choose a loopback-only bind.
+The installer creates the destination if missing and backs up an existing
+copy as `musescore-mcp-plugin.qml.bak`. Dry-run writes nothing. On Linux,
+doctor also reports copies in the old installer's `.local/share` and
+`.config` locations, but installation always uses the selected/default
+Documents folder. Remove obsolete `.qml` copies after confirming the
+correct installation; avoid duplicate plugins. Do not use sudo or an
+administrator shell for a normal per-user installation.
 
-The `run_qml` tool is disabled by default. To enable it, run
-`musescore-mcp install-plugin --allow-eval` instead. Only do this if the
-user asks - it executes arbitrary code inside MuseScore (undo-aware
-engraving edits form one undo step; native writes outside the undo stack
-are not covered; infinite loops freeze MuseScore).
+`run_qml` is disabled by default. Add `--allow-eval` only when the user
+asks to enable it. Reinstalling without that flag disables it again:
+
+```sh
+musescore-mcp install-plugin --allow-eval
+```
+
+Include `--plugin-dir` too if using a custom folder. Code runs inside
+MuseScore: undo-aware engraving edits form one undo step, native writes
+outside the undo stack are not covered, and infinite loops freeze MuseScore.
+
+Then tell the user to:
+
+1. Fully quit and restart MuseScore if it was running during installation
+   (QML is cached for the lifetime of the process).
+2. Enable "MuseScore API Server" under Plugins > Manage plugins.
+3. Open a score and launch Plugins > MuseScore API Server each session.
+
+The plugin listens on port 8765. The bridge uses localhost, but MuseScore
+binds all network interfaces without authentication. Restrict access via
+the host/network firewall where needed; the QML wrapper cannot select a
+loopback-only bind. No Internet port forwarding is needed.
 
 ## Step 3: Register the MCP server in YOUR host
 
 All hosts run the same command: `musescore-mcp` with no arguments (it
 runs the server over stdio). Register yourself according to which agent
-you are. **Self-installation is possible in every host below - the
-differences are only when the change takes effect.**
+you are, if that host is available on the user's platform. Use an absolute
+executable path if the host cannot see your terminal's PATH. On Windows,
+the installed command is `musescore-mcp.exe`; in a venv it lives under
+`Scripts`, versus `bin` on macOS/Linux. Find a PATH installation with
+`command -v musescore-mcp` (POSIX) or
+`(Get-Command musescore-mcp).Source` (PowerShell).
+
+For the uvx variant, the host command is `uvx` and the arguments are:
+
+```json
+["--python", "3.12", "--from", "git+https://github.com/lenborje/musescore-mcp.git", "musescore-mcp"]
+```
+
+For example, in a host accepting `command`/`args`, a Windows venv entry is:
+
+```json
+{
+  "command": "C:/Users/Alice/.musescore-mcp-venv/Scripts/musescore-mcp.exe",
+  "args": []
+}
+```
+
+Replace Alice with the actual user. Forward slashes work in Windows JSON
+paths; if using backslashes, escape each as `\\`. Do not include shell
+quotes or PowerShell's `&` in the JSON command value.
 
 ### Vibe
 
@@ -161,12 +279,39 @@ enterprise level - if nothing starts, check with the user's admin.)
 3. Call `connect_to_musescore`, then `ping_musescore` - it must return
    `{"status": "success", "result": "pong", ...}`. Check `versionsMatch`:
    if false, the installed plugin is out of sync with the server - rerun
-   `musescore-mcp install-plugin` and have the user fully quit and reopen
+   `musescore-mcp install-plugin` (with the original `--plugin-dir` and
+   `--allow-eval` choices) and have the user fully quit and reopen
    MuseScore (plugin QML is cached for the lifetime of its process).
 4. Call `get_score_metadata` and confirm it describes the open score.
 
-If ping fails: the plugin is not running (step 2), or your host did not
-reload the MCP registration (repeat step 3's "takes effect" condition).
+If ping fails, check that the plugin was enabled and launched in the
+running MuseScore process, port 8765 is free, and the host reloaded its
+registration. Run `doctor` with the same plugin-directory selection.
+It prints searched directories and checks the same WebSocket endpoint as
+the bridge (`MUSESCORE_MCP_HOST`, `MUSESCORE_MCP_PORT`,
+`MUSESCORE_MCP_TIMEOUT`, default localhost:8765 and 30 seconds; doctor caps
+its probe at 1.5 seconds). These variables change the client destination,
+not the plugin's fixed listening port. A live version mismatch is a warning;
+a malformed ping reply is a failure. An unreachable plugin remains informational
+so doctor can check Python setup before MuseScore is running.
+
+## Upgrading
+
+Use the tool that installed the server:
+
+```sh
+uv tool upgrade musescore-mcp
+# or:
+pipx upgrade musescore-mcp
+```
+
+For a venv, rerun its Python with `-m pip install --upgrade` and the Git URL
+from step 1. For uvx, add `--refresh` to the invocation to refresh its cached
+source. Then reinstall the bundled plugin, retaining the original
+`--plugin-dir` and `--allow-eval` choices, fully restart MuseScore, launch
+the plugin, and restart/reload the MCP host. Check doctor and the ping
+version handshake again. Updating only the Python package does not update
+the installed QML file.
 
 ## What you get
 

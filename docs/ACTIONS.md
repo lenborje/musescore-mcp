@@ -143,6 +143,12 @@ follow-up.
   MuseScore, then launch the plugin (or install with `musescore-mcp install-plugin --allow-eval`).
   See `docs/AGENT-COOKBOOK.md`.
 
+For a custom MuseScore plugin folder, add `--plugin-dir "PATH"` to
+`install-plugin` and `doctor`, or set `MUSESCORE_MCP_PLUGIN_DIR`.
+Use the same folder and `--allow-eval` choice when reinstalling/upgrading;
+reinstallation without `--allow-eval` disables `run_qml`. See
+`docs/INSTALL-PROMPT.md` for macOS, Linux and Windows instructions.
+
 The docs are also exposed as MCP resources by the server
 (`docs://actions`, `docs://agent-cookbook`, `docs://install-prompt`) and
 printable without a repo checkout via `musescore-mcp docs <name>`.

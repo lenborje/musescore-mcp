@@ -70,12 +70,18 @@ QML.
 
 - Python 3.12+ (CPython or GraalPy)
 - MuseScore Studio 4.4.2+
-- One MCP-capable agent host (see the table below)
+- One MCP-capable agent host available on your OS (see the table below)
+- Git on PATH when installing directly from this repository
+
+Installation supports macOS, Linux and native Windows. Native MuseScore
+integration has been tested on macOS; Linux/Windows live verification
+remains outstanding. Run the Windows bridge in native Windows; WSL
+requires separate networking/path configuration.
 
 ## Installation
 
-Both the server and the plugin are installed by the agent that will use
-them.
+Install the Python server and the MuseScore plugin on the same desktop.
+An agent can perform the command-line installation steps for you.
 
 The quickest path: point your agent at `docs/INSTALL-PROMPT.md` and let
 it install the MCP into itself - it performs every step below, including
@@ -88,19 +94,38 @@ Manual, step by step:
    then install directly from this repository:
    ```sh
    pipx install git+https://github.com/lenborje/musescore-mcp.git
-   # or, into a venv: pip install git+https://github.com/lenborje/musescore-mcp.git
+   pipx ensurepath
+   # or (uv downloads Python 3.12 if needed):
+   uv tool install --python 3.12 git+https://github.com/lenborje/musescore-mcp.git
+   uv tool update-shell
    ```
-   Zero-install alternative (fetch and run, nothing installed):
+   pipx requires an available Python 3.12+ interpreter; select it with
+   `--python` if needed. Reopen the terminal after updating PATH.
+   For venv commands on macOS/Linux and Windows PowerShell, see
+   [the installation guide](docs/INSTALL-PROMPT.md#step-1-python-environment).
+
+   Run without a persistent tool installation (uv caches its environment):
    ```sh
-   uvx --from git+https://github.com/lenborje/musescore-mcp.git musescore-mcp
+   uvx --python 3.12 --from git+https://github.com/lenborje/musescore-mcp.git musescore-mcp
    ```
    Once published on PyPI, all of the above becomes
    `pip install musescore-mcp` / `uvx musescore-mcp`.
 
-2. Install the MuseScore plugin:
+2. Check the plugin folder under MuseScore Preferences > General > Folders,
+   then preview and install the plugin:
    ```sh
+   musescore-mcp install-plugin --dry-run
    musescore-mcp install-plugin
    ```
+   The default is the OS Documents folder plus `MuseScore4/Plugins` on all
+   three platforms. Linux follows XDG Documents settings; Windows follows
+   the Known Folder API, including OneDrive redirection. If MuseScore uses
+   a custom folder, pass `--plugin-dir "PATH"` to both `install-plugin` and
+   `doctor`, or set `MUSESCORE_MCP_PLUGIN_DIR`. The flag overrides the
+   environment; neither changes MuseScore's own folder setting. Old Linux
+   locations are checked by doctor but are no longer installation targets.
+
+   Fully quit and restart MuseScore after copying an updated plugin.
    Enable it once in MuseScore (Plugins > Manage plugins, "MuseScore API
    Server"), and launch it from the Plugins menu each session. To also
    enable `run_qml` - which executes arbitrary code inside MuseScore and
@@ -119,16 +144,30 @@ Manual, step by step:
    | Copilot in VS Code | `.vscode/mcp.json` (or "MCP: Open User Configuration") | on save, VS Code offers to start it |
 
    For the zero-install uvx variant the command is `uvx` with args
-   `--from git+https://github.com/lenborje/musescore-mcp.git musescore-mcp`
+   `--python 3.12 --from git+https://github.com/lenborje/musescore-mcp.git musescore-mcp`
    (plain `musescore-mcp` once published on PyPI).
 
-   `docs/INSTALL-PROMPT.md` contains the exact config snippets.
+   Use an absolute executable path if the host cannot find the command.
+   A venv uses `bin/musescore-mcp` on macOS/Linux and
+   `Scripts/musescore-mcp.exe` on Windows. JSON paths can use forward slashes
+   on Windows; backslashes must be escaped.
+   `docs/INSTALL-PROMPT.md` contains platform-specific commands and config snippets.
 
 4. Check the setup with `musescore-mcp doctor` (Python, dependencies, tool
-   count, installed plugin version, live plugin probe).
+   count, installed plugin version, live plugin probe). An unreachable
+   plugin is informational; confirm the live connection by opening a score,
+   launching the plugin and checking `ping_musescore` and its `versionsMatch`.
+   The doctor probe respects the bridge's host/port environment settings.
 
 From a source checkout instead: `pip install -e .`, then continue at
-step 2. Publishing to PyPI runs through GitHub Actions on version tags
+step 2. For upgrades, use `uv tool upgrade musescore-mcp`,
+`pipx upgrade musescore-mcp`, or your venv's Python with
+`-m pip install --upgrade git+https://github.com/lenborje/musescore-mcp.git`.
+Reinstall the QML plugin with the same folder and eval choices, fully
+restart MuseScore and reload the MCP host. Reinstalling without
+`--allow-eval` disables `run_qml`. See the guide for uvx cache refresh.
+
+Publishing to PyPI runs through GitHub Actions on version tags
 (`.github/workflows/publish.yml`).
 
 ## Usage

@@ -14,14 +14,13 @@ Subcommands:
 import argparse
 import asyncio
 import json
-import os
 import re
 import sys
-from pathlib import Path
 
 import websockets
 
 from . import __version__, assets, set_mixer_sound
+from .installation import plugin_dirs
 
 PLUGIN_FILENAME = "musescore-mcp-plugin.qml"
 EXPECTED_TOOLS = 7
@@ -33,14 +32,8 @@ DOC_ALIASES = {
 }
 
 
-def _candidate_plugin_dirs():
-    home = Path.home()
-    if sys.platform == "darwin" or os.name == "nt":
-        return [home / "Documents" / "MuseScore4" / "Plugins"]
-    return [
-        home / ".local/share/MuseScore/MuseScore4/Plugins",
-        home / ".config/MuseScore/MuseScore4/plugins",
-    ]
+def _candidate_plugin_dirs(override=None):
+    return plugin_dirs(override)
 
 
 # --- subcommands -----------------------------------------------------------
@@ -60,8 +53,7 @@ def cmd_install_plugin(args):
             sys.exit(f"error: expected exactly one {needle!r} in {src}")
         content = content.replace(needle, "property bool allowEval: true")
 
-    dirs = _candidate_plugin_dirs()
-    target_dir = next((d for d in dirs if d.is_dir()), dirs[0])
+    target_dir = _candidate_plugin_dirs(args.plugin_dir)[0]
     dest = target_dir / PLUGIN_FILENAME
 
     if args.dry_run:
@@ -69,6 +61,7 @@ def cmd_install_plugin(args):
         print(f"  from:  {src}")
         print(f"  to:    {dest}")
         print(f"  allowEval: {'true' if args.allow_eval else 'false'}")
+        print("  Match this directory to MuseScore Preferences > General > Folders > Plugins.")
         return
 
     target_dir.mkdir(parents=True, exist_ok=True)
@@ -82,13 +75,15 @@ def cmd_install_plugin(args):
     print(f"  plugin version: {__version__}, allowEval: {'true' if args.allow_eval else 'false'}")
     print()
     print("Next steps (GUI - needs a human):")
-    print("  1. MuseScore: Plugins > Manage plugins, enable \"MuseScore API Server\".")
-    print("  2. Each session: Plugins > MuseScore API Server.")
-    print("  3. If MuseScore was running during the copy: fully quit and restart it")
+    print("  1. Check Preferences > General > Folders > Plugins matches the directory above.")
+    print("     For a custom folder, pass --plugin-dir to install-plugin and doctor.")
+    print("  2. If MuseScore was running during the copy: fully quit and restart it")
     print("     (plugin QML is cached for the lifetime of the process).")
+    print("  3. Plugins > Manage plugins: enable \"MuseScore API Server\".")
+    print("  4. Open a score, then Plugins > MuseScore API Server each session.")
 
 
-def cmd_doctor(_args):
+def cmd_doctor(args):
     ok = True
     print(f"musescore-mcp {__version__}")
 
@@ -120,14 +115,28 @@ def cmd_doctor(_args):
         print(f"[FAIL] MCP server init: {e}")
         ok = False
 
-    installed = [d / PLUGIN_FILENAME for d in _candidate_plugin_dirs()
+    dirs = _candidate_plugin_dirs(args.plugin_dir)
+    for directory in dirs:
+        print(f"[info] plugin search directory: {directory}")
+    installed = [d / PLUGIN_FILENAME for d in dirs
                  if (d / PLUGIN_FILENAME).is_file()]
     if not installed:
         print("[warn] plugin not installed - run `musescore-mcp install-plugin` "
               "(informational; install it before using the MCP tools)")
+    if len(installed) > 1:
+        print("[warn] multiple plugin copies found; keep only the copy in MuseScore's configured folder")
     for pth in installed:
+        if pth.parent != dirs[0]:
+            print(f"[warn] legacy plugin location: {pth.parent}; verify MuseScore's plugin folder "
+                  "and reinstall there with --plugin-dir if needed")
+        try:
+            content = pth.read_text(encoding="utf-8")
+        except (OSError, UnicodeError) as error:
+            print(f"[FAIL] cannot read plugin {pth}: {error}")
+            ok = False
+            continue
         m = re.search(r'property string pluginVersion: "([^"]+)"',
-                      pth.read_text(encoding="utf-8"))
+                      content)
         pv = m.group(1) if m else "unknown (pre-1.0 plugin)"
         if m and pv == __version__:
             print(f"[ok] plugin {pth} (version {pv})")
@@ -135,18 +144,29 @@ def cmd_doctor(_args):
             print(f"[warn] plugin {pth} has version {pv}, expected {__version__} - "
                   "run `musescore-mcp install-plugin` (then restart MuseScore)")
 
+    from .server import _environment_settings
+    host, port, timeout = _environment_settings()
+    uri = f"ws://{host}:{port}"
     try:
         async def probe():
-            async with websockets.connect("ws://localhost:8765", open_timeout=1.5) as ws:
+            async with websockets.connect(uri, open_timeout=min(timeout, 1.5)) as ws:
                 await ws.send('{"action": "ping", "params": {}}')
-                return json.loads(await asyncio.wait_for(ws.recv(), timeout=1.5))
+                return json.loads(await asyncio.wait_for(ws.recv(), timeout=min(timeout, 1.5)))
 
         resp = asyncio.run(probe())
-        pv = resp.get("pluginVersion", "?")
-        print(f"[ok] live plugin reachable on ws://localhost:8765 "
-              f"(pluginVersion {pv}{', MISMATCH' if pv != __version__ else ''})")
+        if not isinstance(resp, dict) or resp.get("status") != "success" or resp.get("result") != "pong":
+            print(f"[FAIL] unexpected ping response from {uri}")
+            ok = False
+        else:
+            pv = resp.get("pluginVersion", "?")
+            label = "ok" if pv == __version__ else "warn"
+            print(f"[{label}] live plugin reachable on {uri} "
+                  f"(pluginVersion {pv}{', MISMATCH' if pv != __version__ else ''})")
+    except (json.JSONDecodeError, UnicodeError):
+        print(f"[FAIL] invalid JSON ping response from {uri}")
+        ok = False
     except Exception:
-        print("[info] live plugin not reachable on ws://localhost:8765 "
+        print(f"[info] live plugin not reachable on {uri} "
               "(normal if MuseScore is closed or the plugin is not started)")
 
     sys.exit(0 if ok else 1)
@@ -190,9 +210,13 @@ def build_parser():
                    help="enable run_qml in the installed plugin (executes arbitrary "
                         "code inside MuseScore; off by default)")
     p.add_argument("--dry-run", action="store_true", help="show what would be done")
+    p.add_argument("--plugin-dir", metavar="DIRECTORY",
+                   help="MuseScore's configured plugin folder (overrides MUSESCORE_MCP_PLUGIN_DIR)")
     p.set_defaults(func=cmd_install_plugin)
 
     p = sub.add_parser("doctor", help="check the installation")
+    p.add_argument("--plugin-dir", metavar="DIRECTORY",
+                   help="check this plugin folder (overrides MUSESCORE_MCP_PLUGIN_DIR)")
     p.set_defaults(func=cmd_doctor)
 
     p = sub.add_parser("set-mixer-sound",
@@ -218,4 +242,7 @@ def main(argv=None):
         return
     parser = build_parser()
     args = parser.parse_args(argv)
-    args.func(args)
+    try:
+        args.func(args)
+    except (OSError, ValueError) as error:
+        parser.exit(1, f"error: {error}\n")
