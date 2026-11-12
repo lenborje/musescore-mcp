@@ -269,3 +269,48 @@ QML JavaScript functions against a model of native score APIs; native API behavi
 `dev/mcp-live-test.py`; `dev/mcp-part-live-test.py --write` covers actual
 linked-part voice filtering and its undo. Historical WebSocket-only live tests are useful
 plugin integration evidence, but do not prove the full MCP route.
+
+## GitHub Actions security review (2026-11-12)
+
+Reviewed 2026-11-12 against the **wfx-loot** campaign (Aikido advisory:
+compromised GitHub accounts pushing a CI secret stealer to tens of
+thousands of repositories, 2026-11-10 onward). Indicators of compromise:
+branches `wfx-docs`, `chore/[a-z0-9]{8}`, `ci-check-[0-9]{4}`; PR title
+"docs: dependency audit notes"; commits `ci: refresh build cache`,
+`ci: restore`, `chore: add ci helper`, `ci: cleanup`,
+`chore: add dependency audit workflow`; exfiltration to
+`194.150.166[.]244:8080/exfil` and `18.143.168[.]96:8080/exfil`.
+
+This repository (the only one of the owner's repositories with workflows)
+was scanned against all indicators - branches, commit messages, reflogs,
+workflow files, `.ci-*.sh` scripts, `postinstall` hooks, exfiltration
+strings, plus zero workflow runs during the campaign window and no probe
+PRs. **No compromise found.**
+
+Current posture is strong:
+
+- No repository secrets or variables at all; PyPI publishing uses
+  OIDC trusted publishing (`pypa/gh-action-pypi-publish`), so there is
+  nothing for a workflow secret stealer to exfiltrate.
+- The repo default for `GITHUB_TOKEN` is read-only.
+- `id-token: write` is granted only in the `publish` job, which is gated
+  to `v*` tags via `if: startsWith(github.ref, 'refs/tags/')`.
+
+Known improvements (identified 2026-11-12, deliberately **not
+implemented** as of that date):
+
+1. `ci.yml` has no explicit `permissions:` block; it inherits the
+   repo-default read-only setting. An explicit `permissions:
+   contents: read` would make CI independent of future settings
+   changes.
+2. Actions are pinned to major-version tags (`actions/checkout@v7`,
+   `actions/setup-python@v7`, `actions/upload-artifact@v7`,
+   `actions/download-artifact@v8`), not commit SHAs, and the repo
+   does not require SHA pinning (`sha_pinning_required: false`).
+   SHA pinning would protect against tag-repointing attacks
+   (cf. the tj-actions/changed-files incident).
+3. The `pypi` environment referenced by `publish.yml` does not exist
+   in the repository yet and no Publish runs have been made. Register
+   the trusted publisher on pypi.org (this repository, workflow
+   `publish.yml`, environment `pypi`) before the first `v*` tag, or
+   the publish job will fail.
