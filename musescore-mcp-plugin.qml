@@ -36,6 +36,7 @@ MuseScore {
     property int currentVoice: 0
     property var codeState: ({})       // persistent state bag for runCode
     property string swapCodePrefix: "" // first voice-exchange code that worked
+    property string copyPastePrefix: "" // first copy/paste code prefix that worked
     // Native transaction bookkeeping (see beginCommand/endCommand).
     property int commandDepth: 0
     property bool commandFailed: false
@@ -261,7 +262,10 @@ MuseScore {
             "selectCurrentMeasure", "selectCustomRange", "syncStateToSelection", "processSequence",
             "insertMeasure", "goToFinalMeasure", "goToBeginningOfScore", "setTimeSignature", "setTempo",
             "getVoices", "swapVoices", "setVoiceVisibility", "getMixerInfo", "setChannelProperties",
-            "setVoicePlayback", "setStaffMute", "setInstrumentSound", "addInstrument", "undo", "ping"];
+            "setVoicePlayback", "setStaffMute", "setInstrumentSound", "addInstrument", "undo", "ping",
+            "insertStaff", "moveStaves", "setStaffVisible", "copyRange",
+            "getLyrics", "setLyric", "transformLyrics", "getLayoutBreaks", "setLayoutBreak",
+            "getInstrumentChanges", "setInstrumentChange", "clearVoice"];
         if (root.sequenceDepth >= 32) return {error: "Nested sequence depth exceeds 32"};
         root.sequenceDepth++;
         try {
@@ -338,6 +342,18 @@ MuseScore {
             selectCustomRange: selectCustomRange,
 
             addInstrument: addInstrument,
+            insertStaff: insertStaff,
+            moveStaves: moveStaves,
+            setStaffVisible: setStaffVisible,
+            copyRange: copyRange,
+            getLyrics: getLyrics,
+            setLyric: setLyric,
+            transformLyrics: transformLyrics,
+            getLayoutBreaks: getLayoutBreaks,
+            setLayoutBreak: setLayoutBreak,
+            getInstrumentChanges: getInstrumentChanges,
+            setInstrumentChange: setInstrumentChange,
+            clearVoice: clearVoice,
             setStaffMute: setStaffMute,
             setInstrumentSound: setInstrumentSound,
             getMixerInfo: getMixerInfo,
@@ -815,8 +831,10 @@ MuseScore {
         } catch (e) { return {error: e.toString()}; }
     }
 
-    // Pitched content snapshot in a voice within a tick range (swap verification)
-    function voiceRangeSnapshot(staff, voice, startTick, endTick) {
+    // Pitched content snapshot in a voice within a tick range (swap/copy
+    // verification). With chordNote (0-based) only that note of each chord
+    // is kept in the snapshot - used to verify chord-splitting copies.
+    function voiceRangeSnapshot(staff, voice, startTick, endTick, chordNote) {
         var cursor = readCursor(staff, voice);
         var events = [];
         var covered = startTick;
@@ -829,16 +847,26 @@ MuseScore {
                 if (end > start) {
                     if (start > covered) events.push({name: "Rest", startTick: covered, durationTicks: start - covered});
                     var notes = el.name === "Note" ? [el] : el.notes;
+                    if (chordNote !== undefined && chordNote !== null)
+                        notes = notes.length > chordNote ? [notes[chordNote]] : [];
                     var pitches = [];
                     for (var ni = 0; notes && ni < notes.length; ni++)
                         pitches.push({pitch: notes[ni].pitch, tpc: notes[ni].tpc,
                             tieBack: !!notes[ni].tieBack, tieForward: !!notes[ni].tieForward});
                     pitches.sort(function(a,b) { return a.pitch - b.pitch; });
-                    var lyrics = [];
-                    for (var li = 0; el.lyrics && li < el.lyrics.length; li++)
-                        lyrics.push({text: el.lyrics[li].text, verse: el.lyrics[li].verse});
-                    events.push({name: "Chord", startTick: start, durationTicks: end - start,
-                        notes: pitches, lyrics: lyrics});
+                    if (pitches.length === 0) {
+                        // chordNote beyond this chord's size: the target hears
+                        // silence here (merged with adjacent rests below)
+                        events.push({name: "Rest", startTick: start, durationTicks: end - start});
+                    } else {
+                        // lyrics ride on chordNote 0 only (the top split staff)
+                        var lyrics = [];
+                        if (chordNote === undefined || chordNote === null || chordNote === 0)
+                            for (var li = 0; el.lyrics && li < el.lyrics.length; li++)
+                                lyrics.push({text: el.lyrics[li].text, verse: el.lyrics[li].verse});
+                        events.push({name: "Chord", startTick: start, durationTicks: end - start,
+                            notes: pitches, lyrics: lyrics});
+                    }
                     covered = end;
                 }
             }
@@ -846,7 +874,21 @@ MuseScore {
         }
         // Normalize explicit and implicit silence, including empty secondary voices.
         if (covered < endTick) events.push({name: "Rest", startTick: covered, durationTicks: endTick - covered});
-        return events;
+        if (events.length === 0 && endTick > startTick)
+            events.push({name: "Rest", startTick: startTick, durationTicks: endTick - startTick});
+        // Merge adjacent rests so filtered-out chords do not fragment silence.
+        var merged = [];
+        for (var mi = 0; mi < events.length; mi++) {
+            var ev = events[mi];
+            var last = merged[merged.length - 1];
+            if (ev.name === "Rest" && last && last.name === "Rest"
+                    && last.startTick + last.durationTicks === ev.startTick) {
+                last.durationTicks += ev.durationTicks;
+            } else {
+                merged.push(ev);
+            }
+        }
+        return merged;
     }
 
     // Swap (exchange) the content of two voices in a range using MuseScore's
@@ -1711,6 +1753,587 @@ MuseScore {
         } catch (e) { return {error: e.toString()}; }
     }
 
+
+    // --- Staves: insert at position, move, visibility ---
+
+    // The part owning a staff, via its track range (a part can own several
+    // staves; tracks are staff * 4 + voice).
+    function partAtStaff(staffIdx) {
+        var parts = curScore.parts;
+        for (var i = 0; i < parts.length; i++) {
+            var first = Math.floor(parts[i].startTrack / 4);
+            var last = Math.floor(parts[i].endTrack / 4) - 1;
+            if (staffIdx >= first && staffIdx <= last) return parts[i];
+        }
+        return null;
+    }
+
+    function staffOrder() {
+        var out = [];
+        for (var i = 0; i < curScore.parts.length; i++)
+            out.push({part: i, partName: curScore.parts[i].partName,
+                instrumentId: curScore.parts[i].instrumentId,
+                startTrack: curScore.parts[i].startTrack});
+        return out;
+    }
+
+    // Insert one staff with the given instrumentId at a 0-based position
+    // (default: end of score). appendPart always appends, so for an inner
+    // position the new staff is moved into place with the native
+    // moveStaves; the resulting order is verified before the transaction
+    // commits, and any failure rolls the whole insert back.
+    function insertStaff(params) {
+        if (!curScore) return {error: "No score open"};
+        try {
+            params = params || {};
+            if (!params.instrumentId) throw new Error("instrumentId is required");
+            var position = params.position !== undefined
+                ? integer(params.position, "position", 0, curScore.nstaves) : curScore.nstaves;
+            withCommand(function() {
+                var before = curScore.nstaves;
+                if (position === before) {
+                    curScore.appendPart(params.instrumentId);
+                } else {
+                    if (typeof curScore.moveStaves !== "function")
+                        throw new Error("moveStaves is not available in this MuseScore build; cannot insert at position " + position);
+                    curScore.appendPart(params.instrumentId);
+                    curScore.moveStaves([curScore.staves[curScore.nstaves - 1]],
+                        curScore.staves[position], 0);
+                }
+                if (curScore.nstaves !== before + 1)
+                    throw new Error("MuseScore did not add a staff");
+                var p = partAtStaff(position);
+                if (!p || p.instrumentId !== params.instrumentId)
+                    throw new Error("Staff at position " + position
+                        + " does not carry instrument " + params.instrumentId);
+            });
+            return {success: true, staff: position, instrumentId: params.instrumentId,
+                nstaves: curScore.nstaves, order: staffOrder()};
+        } catch (e) { return {error: e.toString()}; }
+    }
+
+    // Move one or more staves next to a destination staff (insertMode 0 =
+    // before, 1 = after; default 0). Verified: staff count unchanged and
+    // every staff's part track range still starts at that staff.
+    function moveStaves(params) {
+        if (!curScore) return {error: "No score open"};
+        try {
+            params = params || {};
+            if (typeof curScore.moveStaves !== "function")
+                throw new Error("moveStaves is not available in this MuseScore build");
+            var fromRaw = params.from !== undefined ? params.from : null;
+            if (fromRaw === null) throw new Error("from must be a staff index or a non-empty array");
+            var from = (Array.isArray(fromRaw) ? fromRaw : [fromRaw]).map(function(f) {
+                return integer(f, "from", 0, curScore.nstaves - 1);
+            });
+            if (!from.length) throw new Error("from must not be empty");
+            var toStaff = integer(params.toStaff, "toStaff", 0, curScore.nstaves - 1);
+            var mode = params.insertMode !== undefined ? integer(params.insertMode, "insertMode", 0, 1) : 0;
+            if (mode === 0 && from.indexOf(toStaff) >= 0)
+                throw new Error("destination staff is among the moved staves");
+            var before = staffOrder();
+            var stavesBefore = curScore.nstaves;
+            withCommand(function() {
+                var src = from.map(function(f) { return curScore.staves[f]; });
+                curScore.moveStaves(src, curScore.staves[toStaff], mode);
+                if (curScore.nstaves !== stavesBefore)
+                    throw new Error("Staff count changed unexpectedly");
+                for (var s = 0; s < curScore.staves.length; s++) {
+                    var p = curScore.staves[s].part;
+                    if (!p || Math.floor(p.startTrack / 4) > s
+                            || Math.floor(p.endTrack / 4) - 1 < s)
+                        throw new Error("Part/staff tracks are inconsistent after the move");
+                }
+            });
+            return {success: true, from: from, toStaff: toStaff, insertMode: mode,
+                before: before, after: staffOrder()};
+        } catch (e) { return {error: e.toString()}; }
+    }
+
+    // Show or hide a whole staff in the score (notation visibility, not
+    // playback). Undo-aware like other engraving edits.
+    function setStaffVisible(params) {
+        if (!curScore) return {error: "No score open"};
+        try {
+            params = params || {};
+            var staff = integer(params.staff, "staff", 0, curScore.nstaves - 1);
+            if (typeof params.visible !== "boolean") throw new Error("visible must be a boolean");
+            withCommand(function() {
+                var st = curScore.staves[staff];
+                st.visible = params.visible;
+                if (st.visible !== params.visible)
+                    throw new Error("MuseScore rejected the staff visibility change");
+            });
+            return {success: true, staff: staff, visible: params.visible,
+                staves: staffOrder()};
+        } catch (e) { return {error: e.toString()}; }
+    }
+
+    // --- Range copy: native copy/paste between staves ---
+
+    // Copy the tick range [startTick, endTick) of one staff onto another
+    // staff. Without `voice`, MuseScore's own copy/paste is used, so notes,
+    // rests, lyrics and in-range annotations all come along; paste replaces
+    // the same tick range on the destination staff, and the result is
+    // verified by comparing per-voice snapshots of source and destination.
+    // That path re-selects between copy and paste, so it is top level only
+    // (native range updates are deferred inside an open edit transaction,
+    // e.g. inside run_qml). With `voice` (0-3), only that voice is copied,
+    // element-wise (notes/rests/lyrics), which also works nested; the
+    // copied voice is verified against the source snapshot.
+    // The source defaults to the current selection; dstStaff is required
+    // and must differ from the source.
+    function copyRange(params) {
+        if (!curScore) return {error: "No score open"};
+        try {
+            params = params || {};
+            var voice = params.voice !== undefined ? integer(params.voice, "voice", 0, 3) : null;
+            if (voice === null && root.commandDepth)
+                throw new Error("copyRange without voice re-selects between copy and paste; run it at top level, not inside run_qml");
+            syncStateToSelection();
+            var staff = params.srcStaff !== undefined
+                ? integer(params.srcStaff, "srcStaff", 0, curScore.nstaves - 1)
+                : selectionState.startStaff;
+            var dstStaff = integer(params.dstStaff, "dstStaff", 0, curScore.nstaves - 1);
+            if (dstStaff === staff) throw new Error("dstStaff must differ from the source staff");
+            var start, end;
+            if (params.startTick !== undefined || params.endTick !== undefined) {
+                start = integer(params.startTick, "startTick", 0, scoreEndTick() - 1);
+                end = integer(params.endTick, "endTick", start + 1, scoreEndTick());
+            } else {
+                start = selectionState.startTick;
+                end = selectionState.endTick > start ? selectionState.endTick : scoreEndTick();
+            }
+            var chordNote = params.chordNote !== undefined && params.chordNote !== null
+                ? integer(params.chordNote, "chordNote", 0, 127) : null;
+            if (chordNote !== null && voice === null)
+                throw new Error("chordNote requires voice (single-voice copy mode)");
+            if (voice !== null) {
+                var expectedVoice = voiceRangeSnapshot(staff, voice, start, end, chordNote);
+                withCommand(function() {
+                    var rc = readCursor(staff, voice);
+                    while (rc.segment && rc.tick < end) {
+                        if (rc.tick >= start) {
+                            var el = rc.element;
+                            if (el && (el.name === "Chord" || el.name === "Rest")) {
+                                var ticks = el.duration ? el.duration.ticks
+                                    : (el.actualDuration ? el.actualDuration.ticks : 0);
+                                var wc = createCursor({startStaff: dstStaff, voice: voice, startTick: rc.tick});
+                                wc.setDuration(ticks, 1920);
+                                if (el.name === "Rest") {
+                                    wc.addRest();
+                                } else {
+                                    // chordNote splits chords: copy only the
+                                    // picked note, so one target staff per
+                                    // chord note (one singer per staff).
+                                    var picks = chordNote === null ? el.notes
+                                        : (el.notes.length > chordNote ? [el.notes[chordNote]] : []);
+                                    for (var n = 0; n < picks.length; n++)
+                                        wc.addNote(picks[n].pitch, n > 0);
+                                    if (el.lyrics && (chordNote === null || chordNote === 0)) {
+                                        for (var li = 0; li < el.lyrics.length; li++) {
+                                            var l = newElement(Element.LYRICS);
+                                            l.text = el.lyrics[li].plainText !== undefined
+                                                ? el.lyrics[li].plainText : el.lyrics[li].text;
+                                            wc.add(l);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        if (!rc.next()) break;
+                    }
+                    var afterVoice = voiceRangeSnapshot(dstStaff, voice, start, end);
+                    if (JSON.stringify(afterVoice) !== JSON.stringify(expectedVoice))
+                        throw new Error("Voice copy could not be verified against the source");
+                });
+                return {success: true, srcStaff: staff, dstStaff: dstStaff, voice: voice,
+                    chordNote: chordNote, startTick: start, endTick: end, mode: "voice"};
+            }
+            var expected = [];
+            for (var v = 0; v < 4; v++) expected.push(voiceRangeSnapshot(staff, v, start, end));
+            prepareCommandSelection(start, end, staff, staff + 1);
+            var prefixes = root.copyPastePrefix ? [root.copyPastePrefix] : [];
+            ["action://notation/", ""].forEach(function(p) {
+                if (prefixes.indexOf(p) < 0) prefixes.push(p);
+            });
+            var copied = false;
+            for (var ci = 0; ci < prefixes.length && !copied; ci++) {
+                try {
+                    if (cmd(prefixes[ci] + "copy") === false) continue;
+                    copied = true;
+                } catch (e) { /* try the next candidate code */ }
+            }
+            if (!copied) throw new Error("copy command failed on this MuseScore build");
+            selectRangeChecked(start, end, dstStaff, dstStaff + 1);
+            var working = null;
+            for (var pi = 0; pi < prefixes.length; pi++) {
+                try {
+                    withCommand(function() {
+                        cmd(prefixes[pi] + "paste");
+                        var after = [];
+                        for (var v2 = 0; v2 < 4; v2++)
+                            after.push(voiceRangeSnapshot(dstStaff, v2, start, end));
+                        if (JSON.stringify(after) !== JSON.stringify(expected))
+                            throw new Error("Pasted content does not match the source range");
+                    });
+                    working = prefixes[pi];
+                    break;
+                } catch (candidateError) {
+                    logEvent("Paste candidate rejected: " + prefixes[pi] + "paste");
+                }
+            }
+            if (working === null) throw new Error("paste failed; all candidates rolled back");
+            root.copyPastePrefix = working;
+            return {success: true, srcStaff: staff, dstStaff: dstStaff,
+                startTick: start, endTick: end, mode: "paste", pastedVia: working + "paste"};
+        } catch (e) { return {error: e.toString()}; }
+    }
+
+    // Remove all rests in one voice of a staff within a tick range (default
+    // whole score) - the "cleanup" step after normalizing a copy staff into
+    // voice 0 with swapVoices. Refuses to touch pitched content. The removal
+    // is verified by walking the voice again afterwards.
+    function clearVoice(params) {
+        if (!curScore) return {error: "No score open"};
+        try {
+            params = params || {};
+            var staff = integer(params.staff, "staff", 0, curScore.nstaves - 1);
+            var voice = integer(params.voice, "voice", 0, 3);
+            var start = params.startTick !== undefined ? integer(params.startTick, "startTick", 0, 2147483647) : 0;
+            var end = params.endTick !== undefined ? integer(params.endTick, "endTick", start, 2147483647)
+                : scoreEndTick();
+            var rests = [], others = 0;
+            var rc = readCursor(staff, voice);
+            while (rc.segment && rc.tick < end) {
+                if (rc.tick >= start && rc.element) {
+                    if (rc.element.name === "Rest") rests.push({tick: rc.tick, el: rc.element});
+                    else if (rc.element.name === "Chord" || rc.element.name === "Note") others++;
+                }
+                if (!rc.next()) break;
+            }
+            if (others > 0)
+                throw new Error("Voice " + (voice + 1) + " on staff " + staff + " has " + others
+                    + " pitched element(s) in range; clearVoice only removes rests");
+            var removed = 0;
+            if (rests.length) {
+                withCommand(function() {
+                    curScore.selection.clear();
+                    for (var i = 0; i < rests.length; i++)
+                        if (!curScore.selection.select(rests[i].el, true))
+                            throw new Error("Could not select the rest at tick " + rests[i].tick);
+                    cmd(isMuseScore47OrLater() ? "action://notation/delete" : "delete");
+                    var check = readCursor(staff, voice);
+                    while (check.segment && check.tick < end) {
+                        if (check.tick >= start && check.element && check.element.name === "Rest")
+                            throw new Error("A rest survived the delete at tick " + check.tick);
+                        if (!check.next()) break;
+                    }
+                    removed = rests.length;
+                });
+            }
+            return {success: true, staff: staff, voice: voice, removedRests: removed};
+        } catch (e) { return {error: e.toString()}; }
+    }
+
+    // --- Lyrics: read, set, transform ---
+
+    // All lyric syllables in a staff/tick range, with position and verse.
+    function lyricEntries(params) {
+        params = params || {};
+        var startStaff = params.staff !== undefined ? params.staff
+            : (params.startStaff !== undefined ? params.startStaff : 0);
+        var endStaff = params.staff !== undefined ? params.staff
+            : (params.endStaff !== undefined ? params.endStaff : curScore.nstaves - 1);
+        integer(startStaff, "startStaff", 0, curScore.nstaves - 1);
+        integer(endStaff, "endStaff (inclusive)", startStaff, curScore.nstaves - 1);
+        var start = params.startTick !== undefined ? integer(params.startTick, "startTick", 0, 2147483647) : 0;
+        var end = params.endTick !== undefined ? integer(params.endTick, "endTick", start, 2147483647)
+            : scoreEndTick() + 1;
+        var boundaries = measureBoundaries();
+        var out = [];
+        for (var staff = startStaff; staff <= endStaff; staff++) {
+            for (var voice = 0; voice < 4; voice++) {
+                var c = readCursor(staff, voice);
+                while (c.segment && c.tick < end) {
+                    var el = c.element;
+                    if (c.tick >= start && el && el.lyrics) {
+                        for (var li = 0; li < el.lyrics.length; li++)
+                            out.push({staff: staff, voice: voice, tick: c.tick,
+                                measure: measureIndexForTick(boundaries, c.tick) + 1,
+                                index: li, text: el.lyrics[li].text,
+                                verse: el.lyrics[li].verse});
+                    }
+                    if (!c.next()) break;
+                }
+            }
+        }
+        return out;
+    }
+
+    function getLyrics(params) {
+        if (!curScore) return {error: "No score open"};
+        try { return {success: true, lyrics: lyricEntries(params)}; }
+        catch (e) { return {error: e.toString()}; }
+    }
+
+    // Overwrite one existing lyric syllable at an exact chord/rest position.
+    // Creating brand-new lyrics is only reliable through copyRange (native
+    // paste), so this action refuses positions without an existing syllable.
+    function setLyric(params) {
+        if (!curScore) return {error: "No score open"};
+        try {
+            params = params || {};
+            var staff = integer(params.staff, "staff", 0, curScore.nstaves - 1);
+            var tick = integer(params.tick, "tick", 0, Math.max(0, scoreEndTick() - 1));
+            var voice = params.voice !== undefined ? integer(params.voice, "voice", 0, 3) : 0;
+            var index = params.index !== undefined ? integer(params.index, "index", 0, 2147483647) : 0;
+            if (typeof params.text !== "string") throw new Error("text must be a string");
+            withCommand(function() {
+                var cursor = createCursor({startStaff: staff, voice: voice, startTick: tick});
+                var el = cursor.element;
+                if (!el || !el.lyrics || !el.lyrics[index])
+                    throw new Error("No lyric at staff " + staff + ", tick " + tick
+                        + ", voice " + voice + ", index " + index);
+                el.lyrics[index].text = params.text;
+            });
+            return {success: true, staff: staff, tick: tick, voice: voice, index: index,
+                text: params.text};
+        } catch (e) { return {error: e.toString()}; }
+    }
+
+    // Apply ordered [from, to] replacement rules to lyric syllables in a
+    // range - the declarative form of a pronunciation remapping (e.g.
+    // Swedish to Cantai-friendly English). With wholeSyllable: true a rule
+    // fires only when the entire syllable equals `from` (case-insensitive;
+    // the original first letter's case is kept on the replacement).
+    // Otherwise rules are plain case-sensitive substring replacements
+    // applied in order. One undo step for the whole run.
+    function transformLyrics(params) {
+        if (!curScore) return {error: "No score open"};
+        try {
+            params = params || {};
+            if (!Array.isArray(params.rules)) throw new Error("rules must be an array of [from, to] pairs");
+            var rules = params.rules.map(function(r, i) {
+                if (!Array.isArray(r) || r.length !== 2
+                        || typeof r[0] !== "string" || typeof r[1] !== "string")
+                    throw new Error("rules[" + i + "] must be [string, string]");
+                return [r[0], r[1]];
+            });
+            var whole = params.wholeSyllable !== undefined ? params.wholeSyllable : false;
+            if (typeof whole !== "boolean") throw new Error("wholeSyllable must be a boolean");
+            var targets = lyricEntries({staff: params.staff, startStaff: params.startStaff,
+                endStaff: params.endStaff, startTick: params.startTick, endTick: params.endTick});
+            var changed = 0, samples = [];
+            withCommand(function() {
+                for (var i = 0; i < targets.length; i++) {
+                    var t = targets[i];
+                    var cursor = createCursor({startStaff: t.staff, voice: t.voice, startTick: t.tick});
+                    var el = cursor.element;
+                    if (!el || !el.lyrics || !el.lyrics[t.index]) continue;
+                    var ly = el.lyrics[t.index];
+                    var orig = ly.text, cur = orig;
+                    for (var r = 0; r < rules.length; r++) {
+                        if (whole) {
+                            if (cur.toLowerCase() === rules[r][0].toLowerCase()) {
+                                var rep = rules[r][1];
+                                if (orig.length && orig.charAt(0) === orig.charAt(0).toUpperCase()
+                                        && orig.charAt(0) !== orig.charAt(0).toLowerCase())
+                                    rep = rep.charAt(0).toUpperCase() + rep.slice(1);
+                                cur = rep;
+                            }
+                        } else {
+                            cur = cur.split(rules[r][0]).join(rules[r][1]);
+                        }
+                    }
+                    if (cur !== orig) {
+                        ly.text = cur;
+                        changed++;
+                        if (samples.length < 20)
+                            samples.push({staff: t.staff, tick: t.tick, from: orig, to: cur});
+                    }
+                }
+            });
+            return {success: true, changed: changed, ruleCount: rules.length, samples: samples};
+        } catch (e) { return {error: e.toString()}; }
+    }
+
+    // --- Instrument changes ("Byt instrument" elements) ---
+    //
+    // Terminology: a "system" in the instrument sense runs unbroken through
+    // the score and is changed with InstrumentChange elements - NOT with
+    // layout breaks. Layout breaks (see below) only control ackolad
+    // (system-line) breaking and belong to the layout sense of "system".
+
+    // Find an existing Instrument object by template id, reusing a part's
+    // instrument so the change element carries a real Instrument.
+    function instrumentObjectFor(instrumentId) {
+        var parts = curScore.parts;
+        for (var i = 0; i < parts.length; i++) {
+            var instruments = parts[i].instruments;
+            for (var j = 0; j < instruments.length; j++)
+                if (instruments[j].instrumentId === instrumentId)
+                    return instruments[j];
+        }
+        return null;
+    }
+
+    function instrumentChangeEntries(params) {
+        params = params || {};
+        var startStaff = params.staff !== undefined ? params.staff
+            : (params.startStaff !== undefined ? params.startStaff : 0);
+        var endStaff = params.staff !== undefined ? params.staff
+            : (params.endStaff !== undefined ? params.endStaff : curScore.nstaves - 1);
+        integer(startStaff, "startStaff", 0, curScore.nstaves - 1);
+        integer(endStaff, "endStaff (inclusive)", startStaff, curScore.nstaves - 1);
+        var start = params.startTick !== undefined ? integer(params.startTick, "startTick", 0, 2147483647) : 0;
+        var end = params.endTick !== undefined ? integer(params.endTick, "endTick", start, 2147483647)
+            : scoreEndTick() + 1;
+        var boundaries = measureBoundaries();
+        var out = [];
+        for (var seg = curScore.firstSegment(); seg; seg = seg.next) {
+            if (seg.tick < start) continue;
+            if (seg.tick >= end) break;
+            var annotations = seg.annotations;
+            for (var i = 0; annotations && i < annotations.length; i++) {
+                var ann = annotations[i];
+                if (ann.type !== Element.INSTRUMENT_CHANGE) continue;
+                var staff = Math.floor((ann.track !== undefined ? ann.track : 0) / 4);
+                if (staff < startStaff || staff > endStaff) continue;
+                out.push({staff: staff, tick: seg.tick,
+                    measure: measureIndexForTick(boundaries, seg.tick) + 1,
+                    instrumentId: ann.instrument && ann.instrument.instrumentId !== undefined
+                        ? ann.instrument.instrumentId : null,
+                    text: ann.text !== undefined ? ann.text : null});
+            }
+        }
+        return out;
+    }
+
+    function getInstrumentChanges(params) {
+        if (!curScore) return {error: "No score open"};
+        try { return {success: true, instrumentChanges: instrumentChangeEntries(params)}; }
+        catch (e) { return {error: e.toString()}; }
+    }
+
+    // Place, replace or remove (instrumentId "") an instrument-change
+    // element at an exact staff/tick position. This is the "system" in the
+    // instrument sense: the staff keeps its layout but switches instrument
+    // from that point on. One undo step, verified by reading back.
+    function setInstrumentChange(params) {
+        if (!curScore) return {error: "No score open"};
+        try {
+            params = params || {};
+            var staff = integer(params.staff, "staff", 0, curScore.nstaves - 1);
+            var tick = integer(params.tick, "tick", 0, Math.max(0, scoreEndTick() - 1));
+            if (typeof params.instrumentId !== "string") throw new Error("instrumentId must be a string (\"\" removes)");
+            withCommand(function() {
+                var cursor = createCursor({startStaff: staff, voice: 0, startTick: tick});
+                var seg = cursor.segment;
+                if (!seg) throw new Error("No segment at tick " + tick);
+                var existing = [];
+                var annotations = seg.annotations;
+                for (var i = 0; annotations && i < annotations.length; i++)
+                    if (annotations[i].type === Element.INSTRUMENT_CHANGE
+                            && Math.floor((annotations[i].track || 0) / 4) === staff)
+                        existing.push(annotations[i]);
+                for (var r = 0; r < existing.length; r++) {
+                    if (typeof seg.remove !== "function")
+                        throw new Error("Segment.remove is not available in this MuseScore build");
+                    seg.remove(existing[r]);
+                }
+                if (params.instrumentId !== "") {
+                    var inst = instrumentObjectFor(params.instrumentId);
+                    if (!inst) throw new Error("No part in the score uses instrumentId " + params.instrumentId);
+                    var ic = newElement(Element.INSTRUMENT_CHANGE);
+                    if (typeof ic.setInstrument === "function") ic.setInstrument(inst);
+                    else ic.instrument = inst;
+                    cursor.add(ic);
+                }
+                var after = instrumentChangeEntries({staff: staff, startTick: tick, endTick: tick + 1});
+                var wanted = params.instrumentId !== "";
+                if ((after.length > 0) !== wanted)
+                    throw new Error("Instrument change could not be verified at staff " + staff + ", tick " + tick);
+                if (wanted && after[0].instrumentId !== params.instrumentId)
+                    throw new Error("Instrument change carries " + after[0].instrumentId
+                        + ", not " + params.instrumentId);
+            });
+            return {success: true, staff: staff, tick: tick, instrumentId: params.instrumentId,
+                instrumentChanges: instrumentChangeEntries({staff: staff})};
+        } catch (e) { return {error: e.toString()}; }
+    }
+
+    // --- Layout breaks (ackoladbrytning / system-line breaks) ---
+    //
+    // Terminology: these actions control where a new ackolad (layout
+    // system, a line of staves) begins - the layout sense of "system".
+    // They say nothing about instrument systems; use setInstrumentChange
+    // for those.
+
+    function layoutBreakTypeValue(type) {
+        var name = String(type).toUpperCase().replace(/-/g, "_");
+        if (name === "NONE") name = "NOBREAK";
+        if (name === "SYSTEM") name = "LINE";
+        if (typeof LayoutBreakType !== "undefined" && LayoutBreakType[name] !== undefined)
+            return LayoutBreakType[name];
+        var fallback = {PAGE: 0, LINE: 1, SECTION: 2, NOBREAK: 3};
+        if (fallback[name] === undefined)
+            throw new Error("type must be one of page, line (system), section, none");
+        return fallback[name];
+    }
+
+    function measureAt(index) {
+        var m = curScore.firstMeasure;
+        for (var i = 0; m && i < index; i++) m = m.nextMeasure;
+        if (!m) throw new Error("No measure at index " + index);
+        return m;
+    }
+
+    function getLayoutBreaks(params) {
+        if (!curScore) return {error: "No score open"};
+        try {
+            var table = measureTable();
+            var out = [];
+            for (var i = 0; i < table.length; i++) {
+                var m = measureAt(i);
+                if (m.layoutBreak)
+                    out.push({measure: i + 1, startTick: table[i].startTick,
+                        type: m.layoutBreak.layoutBreakType});
+            }
+            return {success: true, layoutBreaks: out};
+        } catch (e) { return {error: e.toString()}; }
+    }
+
+    // Set (or clear, type "none") the layout break on a 1-based measure.
+    // "line"/"system" starts a new system there, "page" a new page,
+    // "section" a new section. One undo step; verified by reading the
+    // measure's layout break back.
+    function setLayoutBreak(params) {
+        if (!curScore) return {error: "No score open"};
+        try {
+            params = params || {};
+            var table = measureTable();
+            var index = integer(params.measure, "measure (1-based)", 1, table.length) - 1;
+            var value = layoutBreakTypeValue(params.type);
+            var noneValue = layoutBreakTypeValue("none");
+            withCommand(function() {
+                var m = measureAt(index);
+                if (typeof m.add !== "function" || typeof m.remove !== "function")
+                    throw new Error("Measure add/remove is not available in this MuseScore build");
+                if (m.layoutBreak) m.remove(m.layoutBreak);
+                if (value !== noneValue) {
+                    var lb = newElement(Element.LAYOUT_BREAK);
+                    lb.layoutBreakType = value;
+                    m.add(lb);
+                }
+                var present = !!m.layoutBreak;
+                if (present !== (value !== noneValue))
+                    throw new Error("Layout break could not be verified on measure " + (index + 1));
+            });
+            return {success: true, measure: index + 1, type: params.type,
+                layoutBreaks: getLayoutBreaks({}).layoutBreaks};
+        } catch (e) { return {error: e.toString()}; }
+    }
 
     // Plugin launch: open the WebSocket server once on the fixed port and
     // seed the selection mirror if a score is already open. Every connecting

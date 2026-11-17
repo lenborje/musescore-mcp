@@ -36,7 +36,7 @@ import json
 import logging
 import os
 import sys
-from typing import Any, Dict, List, Literal, NotRequired, Optional, TypedDict
+from typing import Any, Dict, List, Literal, NotRequired, Optional, Tuple, TypedDict, Union
 
 import websockets
 from mcp.server.fastmcp import FastMCP
@@ -439,6 +439,145 @@ class setInstrumentSoundAction(TypedDict):
     params: setInstrumentSoundParams
 
 
+class insertStaffParams(TypedDict):
+    instrumentId: str
+    position: NotRequired[int]
+
+
+class insertStaffAction(TypedDict):
+    action: Literal["insertStaff"]
+    params: insertStaffParams
+
+
+# "from" is a Python keyword, so this one needs the functional syntax.
+moveStavesParams = TypedDict("moveStavesParams", {
+    "from": Union[int, List[int]],
+    "toStaff": int,
+    "insertMode": NotRequired[int],
+})
+
+
+class moveStavesAction(TypedDict):
+    action: Literal["moveStaves"]
+    params: moveStavesParams
+
+
+class setStaffVisibleParams(TypedDict):
+    staff: int
+    visible: bool
+
+
+class setStaffVisibleAction(TypedDict):
+    action: Literal["setStaffVisible"]
+    params: setStaffVisibleParams
+
+
+class copyRangeParams(TypedDict):
+    dstStaff: int
+    srcStaff: NotRequired[int]
+    startTick: NotRequired[int]
+    endTick: NotRequired[int]
+    voice: NotRequired[int]
+    chordNote: NotRequired[int]
+
+
+class copyRangeAction(TypedDict):
+    action: Literal["copyRange"]
+    params: copyRangeParams
+
+
+class lyricRangeParams(TypedDict):
+    staff: NotRequired[int]
+    startStaff: NotRequired[int]
+    endStaff: NotRequired[int]
+    startTick: NotRequired[int]
+    endTick: NotRequired[int]
+
+
+class getLyricsAction(TypedDict):
+    action: Literal["getLyrics"]
+    params: lyricRangeParams
+
+
+class setLyricParams(TypedDict):
+    staff: int
+    tick: int
+    voice: NotRequired[int]
+    index: NotRequired[int]
+    text: str
+
+
+class setLyricAction(TypedDict):
+    action: Literal["setLyric"]
+    params: setLyricParams
+
+
+class transformLyricsParams(TypedDict):
+    rules: List[Tuple[str, str]]
+    wholeSyllable: NotRequired[bool]
+    staff: NotRequired[int]
+    startStaff: NotRequired[int]
+    endStaff: NotRequired[int]
+    startTick: NotRequired[int]
+    endTick: NotRequired[int]
+
+
+class transformLyricsAction(TypedDict):
+    action: Literal["transformLyrics"]
+    params: transformLyricsParams
+
+
+class getLayoutBreaksAction(TypedDict):
+    action: Literal["getLayoutBreaks"]
+    params: Dict[str, Any]
+
+
+class setLayoutBreakParams(TypedDict):
+    measure: int
+    type: Literal["page", "line", "system", "section", "none"]
+
+
+class setLayoutBreakAction(TypedDict):
+    action: Literal["setLayoutBreak"]
+    params: setLayoutBreakParams
+
+
+class instrumentChangeRangeParams(TypedDict):
+    staff: NotRequired[int]
+    startStaff: NotRequired[int]
+    endStaff: NotRequired[int]
+    startTick: NotRequired[int]
+    endTick: NotRequired[int]
+
+
+class clearVoiceParams(TypedDict):
+    staff: int
+    voice: int
+    startTick: NotRequired[int]
+    endTick: NotRequired[int]
+
+
+class clearVoiceAction(TypedDict):
+    action: Literal["clearVoice"]
+    params: clearVoiceParams
+
+
+class getInstrumentChangesAction(TypedDict):
+    action: Literal["getInstrumentChanges"]
+    params: instrumentChangeRangeParams
+
+
+class setInstrumentChangeParams(TypedDict):
+    staff: int
+    tick: int
+    instrumentId: str
+
+
+class setInstrumentChangeAction(TypedDict):
+    action: Literal["setInstrumentChange"]
+    params: setInstrumentChangeParams
+
+
 class nestedSequenceParams(TypedDict):
     # Nested actions are checked by the plugin's same dispatcher; avoid a
     # recursive local forward reference on GraalPy.
@@ -464,7 +603,11 @@ ActionSequence = List[
     | swapVoicesAction | setVoiceVisibilityAction | setStaffMuteAction
     | getHarmoniesAction | setHarmonyAction | getMixerInfoAction
     | setChannelPropertiesAction | setVoicePlaybackAction | addInstrumentAction
-    | setInstrumentSoundAction | nestedSequenceAction]
+    | setInstrumentSoundAction | insertStaffAction | moveStavesAction
+    | setStaffVisibleAction | copyRangeAction | getLyricsAction | setLyricAction
+    | transformLyricsAction | getLayoutBreaksAction | setLayoutBreakAction
+    | getInstrumentChangesAction | setInstrumentChangeAction | clearVoiceAction
+    | nestedSequenceAction]
 
 
 class MuseScoreMCP:

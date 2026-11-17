@@ -2,7 +2,8 @@
 // cursor and boolean undo lock. Native layout/command integration needs MuseScore.
 const assert = require('node:assert/strict');
 const {loadPlugin, plain} = require('./plugin-test-support');
-const Element = {CHORD: 1, REST: 2, TIMESIG: 3, KEYSIG: 4, TEMPO_TEXT: 5, HARMONY: 99};
+const Element = {CHORD: 1, REST: 2, TIMESIG: 3, KEYSIG: 4, TEMPO_TEXT: 5, HARMONY: 99,
+    LAYOUT_BREAK: 6, LYRICS: 7, INSTRUMENT_CHANGE: 8};
 const clone = value => JSON.parse(JSON.stringify(value));
 
 function fixture() {
@@ -19,10 +20,12 @@ function fixture() {
                 {tick:2400,pitches:[53],duration:1440}],
         },
         annotations: {},
+        breaks: {}, // measure start tick -> LayoutBreak element
     };
-    let saved, active = false, locked = false, nativeStarts = 0, nativeEnds = 0;
+    let saved, savedScore, active = false, locked = false, nativeStarts = 0, nativeEnds = 0;
     const history = [];
     const commandCalls = [];
+    let clipboard = null;
     function measures() {
         let tick = 0;
         const table = state.measures.map((length, index) => {
@@ -31,7 +34,13 @@ function fixture() {
             tick += length;
             return m;
         });
-        table.forEach((m, i) => m.nextMeasure = table[i + 1] || null);
+        table.forEach((m, i) => {
+            m.nextMeasure = table[i + 1] || null;
+            const mt = m.tick.ticks;
+            Object.defineProperty(m, 'layoutBreak', {get: () => state.breaks[mt] || null});
+            m.add = el => { state.breaks[mt] = el; };
+            m.remove = el => { if (state.breaks[mt] === el) delete state.breaks[mt]; };
+        });
         return table;
     }
     const end = () => state.measures.reduce((a,b) => a+b,0);
@@ -48,26 +57,34 @@ function fixture() {
     }
     function segment(tick) {
         return {tick, annotations:state.annotations[tick] || [],
-            elementAt(track) {return wrap((state.tracks[track] || []).find(e=>e.tick===tick),track);}};
+            elementAt(track) {return wrap((state.tracks[track] || []).find(e=>e.tick===tick),track);},
+            remove(el) {const a=state.annotations[tick] || []; const i=a.indexOf(el); if (i>=0) a.splice(i,1);}};
     }
     let range = {start:0,end:480,staff:0,endStaff:1};
+    let selectedElements = [];
     const selection = {
         get startSegment() {return range && !range.planned ? {tick:range.start}:null;},
         get endSegment() {return range && range.end < end() ? {tick:range.end}:null;},
         get startStaff() {return range ? range.staff:0;},
         get endStaff() {return range ? range.endStaff:1;},
         elements: [],
+        select(el, add) {
+            if (!el || el.track === undefined || !el.fraction) return false;
+            if (!add) selectedElements = [];
+            selectedElements.push({track: el.track, tick: el.fraction.ticks});
+            return true;
+        },
+        deselect() {selectedElements = []; return true;},
+        clear() {selectedElements = []; range = null;},
         selectRange(start,finish,staff,endStaff) {
             if (finish > end()) finish=end(); // native null end sentinel
             else if (finish === end()) {
                 // Native tick2leftSegment(scoreEnd) resolves the final event.
                 finish=Math.max(...Object.values(state.tracks).flat().map(e=>e.tick));
             }
-            if (start<0 || finish<=start || finish>end() || staff<0 || endStaff<=staff || endStaff>2) return false;
+            if (start<0 || finish<=start || finish>end() || staff<0 || endStaff<=staff || endStaff>score.nstaves) return false;
             range={start,end:finish,staff,endStaff,planned:active && finish < end()}; return true;
         },
-        clear() {range=null;},
-        select() {return true;},
     };
     const part = {partName:'Piano', instrumentId:'grand-piano', longName:'Piano',
         startTrack:0,endTrack:8,instruments:[{instrumentId:'grand-piano', channels:[
@@ -82,14 +99,22 @@ function fixture() {
             lyricist:'Test Lyricist',copyright:'Test Copyright'}[key] || '';},
         startCmd() {
             nativeStarts++;
-            if (!locked) {saved=clone(state);active=true;}
+            if (!locked) {
+                saved=clone(state);
+                savedScore={parts:clone(this.parts),staves:clone(this.staves),nstaves:this.nstaves};
+                active=true;
+            }
             locked=true;
         },
         endCmd(rollback) {
             nativeEnds++;locked=false;
             if (active) {
-                if (rollback) state=clone(saved);
-                else history.push(clone(saved));
+                if (rollback) {
+                    state=clone(saved);
+                    restoreScore(clone(savedScore));
+                } else {
+                    history.push({state:clone(saved),score:clone(savedScore)});
+                }
                 active=false;
             }
         },
@@ -100,6 +125,29 @@ function fixture() {
                 endTrack:(this.nstaves+1)*4,instruments:[]});
             this.staves.push({part:this.parts.at(-1),visible:true});
             this.nstaves++;
+        },
+        moveStaves(srcStaves, destStaff, mode) {
+            const srcIdx=srcStaves.map(s=>this.staves.indexOf(s));
+            const moving=srcIdx.map(i=>this.staves[i]);
+            const remaining=this.staves.filter((_,i)=>!srcIdx.includes(i));
+            let at=remaining.indexOf(destStaff)+(mode===1?1:0);
+            remaining.splice(at,0,...moving);
+            // track contents follow their staff
+            const oldOrder=this.staves.slice();
+            const remap={};
+            remaining.forEach((st,ni)=>{remap[oldOrder.indexOf(st)]=ni;});
+            const newTracks={};
+            for (const tk of Object.keys(state.tracks)) {
+                const t=Number(tk);
+                newTracks[remap[Math.floor(t/4)]*4+(t%4)]=state.tracks[t];
+            }
+            state.tracks=newTracks;
+            this.staves=remaining;
+            this.nstaves=remaining.length;
+            for (const p of this.parts) {
+                const idxs=remaining.map((st,i)=>st.part===p?i:-1).filter(i=>i>=0);
+                if (idxs.length) {p.startTrack=idxs[0]*4;p.endTrack=(idxs[idxs.length-1]+1)*4;}
+            }
         },
         firstSegment() {
             const ticks=[...new Set([...measures().map(m=>m.tick.ticks),
@@ -152,6 +200,13 @@ function fixture() {
                     e.duration=span.ticks/ratio.numerator;e.tuplet={duration:span};
                 },
                 add(element) {
+                    if (element.type === Element.LYRICS) {
+                        const es=state.tracks[this.track] ||= [];
+                        let e=es.find(x=>x.tick===position);
+                        if (!e) {e={tick:position,pitches:[],duration};es.push(e);es.sort((a,b)=>a.tick-b.tick);}
+                        (e.lyrics ||= []).push({text:element.text,verse:element.verse || 0});
+                        return;
+                    }
                     element.track=this.track;element.staffIdx=this.staffIdx;
                     (state.annotations[position] ||= []).push(element);
                 },
@@ -159,14 +214,50 @@ function fixture() {
             return c;
         },
     };
+    function restoreScore(s) {
+        score.parts = s.parts;
+        score.staves = s.staves.map(st => st.part
+            ? {...st, part: score.parts.find(p => p.partName === st.part.partName) || st.part}
+            : st);
+        score.nstaves = s.nstaves;
+    }
     let brokenCandidate = false;
     function cmd(code) {
         commandCalls.push(code);
         if (code.includes('undo')) {
             if (locked) return;
-            if (history.length) state=history.pop();
+            if (history.length) { const h=history.pop(); state=h.state; restoreScore(h.score); }
         } else if (code==='append-measure') state.measures.push(1920);
+        else if (code==='copy' || code==='action://notation/copy') {
+            clipboard = {start: range.start, end: range.end, staff: range.staff, endStaff: range.endStaff,
+                tracks: clone(Object.fromEntries(Object.entries(state.tracks)
+                    .filter(([t]) => { const s = Math.floor(Number(t) / 4); return s >= range.staff && s < range.endStaff; })
+                    .map(([t, es]) => [t, es.filter(e => e.tick >= range.start && e.tick < range.end)]))) };
+            return true;
+        } else if (code==='paste' || code==='action://notation/paste') {
+            if (!clipboard) throw new Error('empty clipboard');
+            if (range.endStaff - range.staff !== clipboard.endStaff - clipboard.staff)
+                throw new Error('staff count mismatch');
+            for (let k = 0; k < clipboard.endStaff - clipboard.staff; k++) {
+                const dst = range.staff + k, src = clipboard.staff + k;
+                for (let v = 0; v < 4; v++) {
+                    const dt = dst * 4 + v, st = src * 4 + v;
+                    const inside = e => e.tick >= range.start && e.tick < range.end;
+                    const kept = (state.tracks[dt] || []).filter(e => !inside(e));
+                    const add = (clipboard.tracks[st] || []).map(e => clone(e));
+                    state.tracks[dt] = [...kept, ...add].sort((a, b) => a.tick - b.tick);
+                }
+            }
+            return true;
+        }
         else if (code==='insert-measure') state.measures.push(1920);
+        else if (code==='delete' || code==='action://notation/delete') {
+            for (const sel of selectedElements) {
+                const es=state.tracks[sel.track] || [];
+                state.tracks[sel.track]=es.filter(e=>e.tick!==sel.tick);
+            }
+            selectedElements=[];
+        }
         else if (/voice-x\d\d$/.test(code)) {
             if (range.planned) return; // native tickStart is -1 until commit
             const [a,b]=code.slice(-2).split('').map(n=>Number(n)-1);
@@ -182,7 +273,10 @@ function fixture() {
         }
     }
     const context=loadPlugin({curScore:score,Element,cmd,mscoreMajorVersion:4,mscoreMinorVersion:7,
-        newElement:type=>({type,name:type===Element.TEMPO_TEXT ? 'TempoText':'TimeSig'})});
+        newElement:type=>({type, name: type===Element.TEMPO_TEXT ? 'TempoText'
+            : type===Element.LAYOUT_BREAK ? 'LayoutBreak'
+            : type===Element.LYRICS ? 'Lyrics'
+            : type===Element.INSTRUMENT_CHANGE ? 'InstrumentChange' : 'TimeSig'})});
     return {c:context,score,history,commandCalls,state:()=>clone(state),
         stats:()=>({starts:nativeStarts,ends:nativeEnds,locked}),breakSwap:()=>brokenCandidate=true};
 }
@@ -362,6 +456,157 @@ check('plugin logs omit incoming code, parameters and eval exception payloads',(
         code:'throw new Error("'+secret+'");',params:{secret}}}),1);
     assert(!logs.join('\n').includes(secret));
     assert(replies[0].result.error.includes(secret)); // error is returned to its caller
+});
+check('insertStaff at an inner position lands there, content follows, one undo step',()=>{
+    const f=fixture(),c=f.c;const before=f.state();
+    const r=c.insertStaff({instrumentId:'flute',position:0});
+    assert.equal(r.success,true,r.error);
+    assert.equal(f.score.nstaves,3);
+    assert.equal(f.score.staves[0].part.instrumentId,'flute');
+    assert.equal(f.score.staves[0].part.startTrack,0);
+    assert.equal(f.score.staves[1].part.partName,'Piano');
+    assert(f.state().tracks[4].some(e=>e.tick===0&&e.pitches[0]===60)); // old staff 0 content now on staff 1
+    c.undo();
+    assert.equal(f.score.nstaves,2);
+    assert.deepEqual(f.state(),before);
+    assert.equal(f.score.staves[0].part.partName,'Piano');
+});
+check('moveStaves reorders staves and keeps part/track consistency',()=>{
+    const f=fixture(),c=f.c;
+    const r=c.moveStaves({from:[1],toStaff:0,insertMode:0});
+    assert.equal(r.success,true,r.error);
+    assert.equal(f.score.staves[0].part.startTrack,0);
+    assert(f.state().tracks[0].some(e=>e.tick===0&&e.pitches[0]===48)); // old staff 1 content moved to track 0
+    assert(f.state().tracks[4].some(e=>e.tick===0&&e.pitches[0]===60));
+    assert.match(c.moveStaves({from:[0],toStaff:0,insertMode:0}).error,/among the moved/);
+});
+check('setStaffVisible toggles notation visibility and rolls back',()=>{
+    const f=fixture(),c=f.c;
+    const r=c.setStaffVisible({staff:1,visible:false});
+    assert.equal(r.success,true,r.error);
+    assert.equal(f.score.staves[1].visible,false);
+    c.undo();
+    assert.equal(f.score.staves[1].visible,true);
+});
+check('copyRange pastes a staff range with lyrics and verifies against the source',()=>{
+    const f=fixture(),c=f.c;
+    c.selectCustomRange({startTick:0,endTick:5760,startStaff:0,endStaff:1});
+    const r=c.copyRange({dstStaff:1});
+    assert.equal(r.success,true,r.error);
+    assert(f.state().tracks[4].some(e=>e.tick===0&&e.lyrics&&e.lyrics[0].text==='å'));
+    assert(f.state().tracks[4].some(e=>e.tick===3840&&e.pitches[0]===67));
+    assert(f.state().tracks[0].some(e=>e.tick===0&&e.pitches[0]===60)); // source untouched
+    c.undo();
+    assert(!f.state().tracks[4].some(e=>e.tick===3840&&e.pitches[0]===67));
+});
+check('copyRange with voice copies only that voice, lyrics included, and is undoable',()=>{
+    const f=fixture(),c=f.c;
+    c.insertStaff({instrumentId:'flute'}); // new empty staff 2
+    const r=c.copyRange({srcStaff:0,dstStaff:2,voice:0,startTick:0,endTick:5760});
+    assert.equal(r.success,true,r.error);
+    assert.equal(r.mode,'voice');
+    assert.deepEqual(f.state().tracks[8].map(e=>e.tick),[0,480,2400,3840]); // track 0 content
+    assert.equal(f.state().tracks[8][0].lyrics[0].text,'å'); // lyric came along
+    assert(!f.state().tracks[9] || !f.state().tracks[9].length); // voice 1 of dst untouched
+    c.undo();
+    assert(!f.state().tracks[8] || !f.state().tracks[8].length);
+});
+check('copyRange chordNote splits chords one note per target staff, lyrics on the first',()=>{
+    const f=fixture(),c=f.c;
+    c.insertStaff({instrumentId:'flute'}); // staff 2
+    c.insertStaff({instrumentId:'flute'}); // staff 3
+    // track 1 (staff 0, voice 1) has a chord [64,67] at tick 480
+    const r0=c.copyRange({srcStaff:0,dstStaff:2,voice:1,chordNote:0,startTick:0,endTick:5760});
+    const r1=c.copyRange({srcStaff:0,dstStaff:3,voice:1,chordNote:1,startTick:0,endTick:5760});
+    assert.equal(r0.success,true,r0.error);
+    assert.equal(r1.success,true,r1.error);
+    assert.deepEqual(f.state().tracks[9].find(e=>e.tick===480).pitches,[64]);  // staff2 voice1 = track 9
+    assert.deepEqual(f.state().tracks[13].find(e=>e.tick===480).pitches,[67]); // staff3 voice1 = track 13
+    // single-note voice with lyric: chordNote 0 keeps the lyric, chordNote 1 hears silence
+    const l0=c.copyRange({srcStaff:0,dstStaff:2,voice:0,chordNote:0,startTick:0,endTick:5760});
+    const l1=c.copyRange({srcStaff:0,dstStaff:3,voice:0,chordNote:1,startTick:0,endTick:5760});
+    assert.equal(l0.success,true,l0.error);
+    assert.equal(l1.success,true,l1.error);
+    assert.equal(f.state().tracks[8][0].lyrics[0].text,'å'); // staff2 voice0 = track 8
+    assert(!f.state().tracks[12] || !f.state().tracks[12].some(e=>e.tick===0&&e.pitches.length));
+    assert.match(c.copyRange({srcStaff:0,dstStaff:2,chordNote:1}).error,/requires voice/);
+});
+check('clearVoice removes only rests, refuses pitched content; swapVoices normalizes a copy into voice 0',()=>{
+    const f=fixture(),c=f.c;
+    c.selectCustomRange({startTick:3840,endTick:5760,startStaff:1,endStaff:2});
+    c.addRest({voice:1,duration:{numerator:1,denominator:2},advanceCursorAfterAction:false});
+    assert(f.state().tracks[5].some(e=>e.tick===3840&&!e.pitches.length));
+    const r=c.clearVoice({staff:1,voice:1,startTick:3840,endTick:5760});
+    assert.equal(r.success,true,r.error);
+    assert.equal(r.removedRests,1);
+    assert(!f.state().tracks[5].some(e=>e.tick===3840));
+    assert.match(c.clearVoice({staff:1,voice:1}).error,/pitched/);
+    // normalize: swap voice 1 content into voice 0 on staff 1
+    const s=c.swapVoices({voice1:0,voice2:1,startStaff:1,endStaff:2,startTick:0,endTick:5760});
+    assert.equal(s.success,true,s.error);
+    assert(f.state().tracks[4].some(e=>e.tick===480&&e.pitches.includes(52))); // voice 1 content now in voice 0
+    assert(f.state().tracks[5].some(e=>e.tick===0&&e.pitches.includes(48)));  // old voice 0 content now in voice 1
+    // clearVoice refuses to delete that pitched leftover (safety); rests-only voices clear fine
+    assert.match(c.clearVoice({staff:1,voice:1}).error,/pitched/);
+});
+check('copyRange refuses same source and destination and top-level-only inside eval',()=>{
+    const f=fixture(),c=f.c;c.root.allowEval=true;
+    assert.match(c.copyRange({dstStaff:0,srcStaff:0}).error,/differ/);
+    const nested=c.runCode({code:'ctx.processCommand({action:"copyRange",params:{dstStaff:1,srcStaff:0}});return 1;'});
+    assert.equal(nested.status,'error');
+    assert.match(nested.error,/top level/);
+});
+check('lyrics are readable, settable and transformable by declarative rules',()=>{
+    const f=fixture(),c=f.c;
+    const g=c.getLyrics({staff:0});
+    assert.equal(g.success,true);
+    assert.equal(g.lyrics.length,1);
+    assert.equal(g.lyrics[0].text,'å');
+    assert.equal(g.lyrics[0].measure,1);
+    assert.equal(c.setLyric({staff:0,tick:0,text:'Hello'}).success,true);
+    assert.equal(f.state().tracks[0][0].lyrics[0].text,'Hello');
+    const t=c.transformLyrics({staff:0,rules:[['hello','bye']],wholeSyllable:true});
+    assert.equal(t.success,true,t.error);
+    assert.equal(t.changed,1);
+    assert.equal(f.state().tracks[0][0].lyrics[0].text,'Bye'); // first-letter case kept
+    const t2=c.transformLyrics({staff:0,rules:[['B','b']]}); // substring mode is case-sensitive
+    assert.equal(f.state().tracks[0][0].lyrics[0].text,'bye');
+    assert.match(c.setLyric({staff:0,tick:480,text:'x'}).error,/No lyric/);
+    assert.match(c.transformLyrics({rules:'nope'}).error,/array/);
+});
+check('layout breaks are set, listed, replaced and cleared, one undo step each',()=>{
+    const f=fixture(),c=f.c;
+    const r=c.setLayoutBreak({measure:2,type:'page'});
+    assert.equal(r.success,true,r.error);
+    assert.equal(f.state().breaks[480].layoutBreakType,0); // PAGE
+    assert.deepEqual(plain(c.getLayoutBreaks({}).layoutBreaks).map(b=>b.measure),[2]);
+    assert.equal(c.setLayoutBreak({measure:2,type:'section'}).success,true);
+    assert.equal(f.state().breaks[480].layoutBreakType,2); // replaced, not duplicated
+    assert.equal(c.getLayoutBreaks({}).layoutBreaks.length,1);
+    c.setLayoutBreak({measure:3,type:'line'});
+    assert.equal(c.getLayoutBreaks({}).layoutBreaks.length,2);
+    c.setLayoutBreak({measure:2,type:'none'});
+    assert.deepEqual(plain(c.getLayoutBreaks({}).layoutBreaks).map(b=>b.measure),[3]);
+    c.undo();
+    assert.equal(c.getLayoutBreaks({}).layoutBreaks.length,2); // only the clear was undone
+    assert.match(c.setLayoutBreak({measure:2,type:'bogus'}).error,/type must be/);
+});
+check('instrument changes (the instrument sense of "system") are listed, placed, replaced, removed',()=>{
+    const f=fixture(),c=f.c;
+    assert.deepEqual(plain(c.getInstrumentChanges({}).instrumentChanges),[]);
+    const r=c.setInstrumentChange({staff:0,tick:2400,instrumentId:'grand-piano'});
+    assert.equal(r.success,true,r.error);
+    const g=c.getInstrumentChanges({});
+    assert.equal(g.instrumentChanges.length,1);
+    assert.equal(g.instrumentChanges[0].tick,2400);
+    assert.equal(g.instrumentChanges[0].measure,3);
+    assert.equal(g.instrumentChanges[0].instrumentId,'grand-piano');
+    assert.match(c.setInstrumentChange({staff:0,tick:0,instrumentId:'no-such-instrument'}).error,/No part/);
+    assert.equal(c.setInstrumentChange({staff:0,tick:2400,instrumentId:''}).success,true); // remove
+    assert.equal(c.getInstrumentChanges({}).instrumentChanges.length,0);
+    c.setInstrumentChange({staff:1,tick:480,instrumentId:'grand-piano'});
+    assert.deepEqual(plain(c.getInstrumentChanges({staff:1}).instrumentChanges).map(e=>e.tick),[480]);
+    assert.deepEqual(plain(c.getInstrumentChanges({staff:0}).instrumentChanges),[]);
 });
 console.log(`${checks}/${checks} plugin regression checks passed`);
 }

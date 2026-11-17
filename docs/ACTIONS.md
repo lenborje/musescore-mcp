@@ -102,12 +102,41 @@ notes, and does not support deleting symbols or fretboard-diagram children.
 
 | Action | Params | Notes |
 |---|---|---|
-| `addInstrument` | `instrumentId` | |
+| `addInstrument` | `instrumentId` | Appends a part (staff at the end). |
+| `insertStaff` | `instrumentId`, optional `position` (0-based, default end) | Appends the part, then moves the new staff to `position` via native `moveStaves` (on builds where `insertPart` ignores the index). Verifies the part at `position` carries the instrument; one undo step. |
+| `moveStaves` | `from` (int or int[]), `toStaff`, optional `insertMode` (0 = before, 1 = after; default 0) | Native `moveStaves`. Verifies staff count and part/track consistency; returns `before`/`after` order. |
+| `setStaffVisible` | `staff`, `visible` (bool) | Notation visibility of a whole staff (not playback). Read-back verified; undo-aware. |
+| `clearVoice` | `staff`, `voice` (0-3), optional `startTick`/`endTick` (default whole score) | Deletes all rests in that voice/range (the cleanup after normalizing a staff into voice 0 with `swapVoices`). Refuses to delete pitched content. Verified by re-walking the voice; one undo step. |
+| `copyRange` | `dstStaff` (required), optional `srcStaff`, `startTick`, `endTick` (default: current selection), optional `voice` (0-3), optional `chordNote` (0-based, requires `voice`) | Without `voice`: native copy/paste of one staff's tick range onto `dstStaff`, replacing the same range there - copies notes, rests, lyrics and in-range annotations; verified by per-voice snapshots; top level only (re-selects between copy and paste). With `voice`: element-wise copy of that single voice only (notes/rests/lyrics) - the voice index is preserved (source voice 2 lands in voice 2 of the target), so no `swapVoices` is needed afterwards; also works inside `run_qml`. With `chordNote`: only that note of each chord is copied (chords split one note per target staff; lyrics ride on `chordNote` 0; positions beyond a chord's size become rests). Verified against a chord-filtered source snapshot. |
 | `setStaffMute` | `staff`, `mute` (bool) | Sets all four staff playback flags to `!mute`; does not change notation visibility. Returns `previousPlayback` (voice 1-4) for explicit restoration and `undoable: false`. Unmute enables all four voices. Rejected inside run_qml. |
 | `setInstrumentSound` | `staff`, `instrumentId` | Real implementation: replaces the part's instrument with a fresh copy from the local instrument templates (`Score.replaceInstrument`). **Side effect that fixes localized mixer names**: the mixer track name (`trackName` in the file format) is re-created from the template, so tracks inherited from another user's language are renamed to the local equivalent. Pass the SAME instrumentId to only refresh the names (notes and sound kept); a different id changes transposition/clef/playback too. Verified on 4.7.5 with a downloaded Russian-language score: the new name appears in the Mixer only after the score is closed and reopened (saving first) - not live, and not on Mixer reopen. |
 | `getMixerInfo` | – | Reads the full mixer state: per part - `partName`, `longName`, `instrumentId`, staff range, all instruments with their channels (`name`, `midiProgram`, `midiBank`, `volume`, `pan`, `chorus`, `reverb`, `mute`) and the per-staff `playbackVoice1-4` flags. |
 | `setChannelProperties` | `staff`, optional `channel` (default 0), optional `volume`, `pan`, `chorus`, `reverb`, `midiProgram`, `midiBank` | Sets the given channel (mixer strip) properties on the part that owns the staff. Only provided fields are written. Ranges: `volume`/`pan`/`midiProgram`/`midiBank` 0-127 (MIDI scale), `chorus`/`reverb` 0-100. Writability verified empirically on 4.7.5: these six properties persist in the score. **NOT undoable**: MuseScore does not register mixer channel changes in the edit history (verified: `undo` leaves the new value in place), so restore by writing the original value back explicitly. `Channel.name` and `Channel.mute` are read-only in the plugin API and mixer `solo` is not exposed at all - none of these can be set. The Mixer UI may not refresh live (same reload quirk as the track names); the values persist on save. |
 | `setVoicePlayback` | `staff`, `voice` (1-4), `play` (bool) | Enables or disables playback for one voice of a staff (the `Staff.playbackVoice1-4` flags - the Mixer's per-voice strips). Writability verified on 4.7.5; the value persists in the score. As with the channel properties, treat the change as not undoable and restore by writing the original value back. The Mixer UI's live refresh has not been verified. |
+
+## Lyrics
+
+Lyrics hang on chords/rests (`element.lyrics`), one entry per verse line.
+
+| Action | Params | Notes |
+|---|---|---|
+| `getLyrics` | optional `staff` OR `startStaff`/`endStaff` (inclusive), optional `startTick`/`endTick` | Returns `lyrics: [{staff, voice, tick, measure, index, text, verse}]`. |
+| `setLyric` | `staff`, `tick`, `text` (required), optional `voice` (default 0), `index` (default 0) | Overwrites an existing syllable at an exact position. Creating new syllables is only reliable via `copyRange`; this action refuses positions without an existing lyric. |
+| `transformLyrics` | `rules` (required, ordered `[[from, to], ...]`), optional `wholeSyllable` (bool, default false), optional staff/tick range | Applies the rules to every syllable in range - the declarative form of a pronunciation remapping (e.g. Swedish to Cantai-friendly English). Substring mode is case-sensitive and applied in rule order; `wholeSyllable: true` fires a rule only when the entire syllable equals `from` (case-insensitive, original first-letter case kept). One undo step; returns `changed` and up to 20 `samples`. |
+
+## "System": two meanings, two action groups
+
+MuseScore's terminology is ambiguous here; this catalogue keeps them apart:
+
+1. **Instrument system** - an instrument running unbroken through the score, possibly switching staves via "Byt instrument" (InstrumentChange) elements. Layout has nothing to do with it.
+2. **Layout system (ackolad)** - one line of staves in the page layout, controlled by layout breaks.
+
+| Action | Params | Notes |
+|---|---|---|
+| `getInstrumentChanges` | optional staff/tick range | Lists InstrumentChange elements: `[{staff, tick, measure, instrumentId, text}]`. |
+| `setInstrumentChange` | `staff`, `tick`, `instrumentId` (empty string removes) | Places/replaces/removes the instrument change at an exact position (instrument sense of "system"). The instrument object is reused from a part already using that `instrumentId`. Verified by read-back; one undo step. |
+| `getLayoutBreaks` | - | Lists layout breaks: `[{measure, startTick, type}]` (`type` 0=page, 1=line/system, 2=section, 3=none). |
+| `setLayoutBreak` | `measure` (1-based), `type` (`page`/`line`/`system`/`section`/`none`) | Sets/replaces/clears the layout break on a measure (ackolad sense of "system" - where a new system line starts). Verified by read-back; one undo step. |
 
 ## Sequencing
 
@@ -260,6 +289,15 @@ plugin when changing the target. Restarting only the plugin menu action
 does not reliably reload changed QML.
 
 ## Verification scope
+
+The staff/lyrics/layout-break/instrument-change actions added after 1.0.1
+(`insertStaff`, `moveStaves`, `setStaffVisible`, `copyRange`, `getLyrics`,
+`setLyric`, `transformLyrics`, `getLayoutBreaks`, `setLayoutBreak`,
+`getInstrumentChanges`, `setInstrumentChange`) are covered by the offline
+plugin regression (`dev/plugin-regression-test.js`) and the real-bridge MCP
+model tests (`tests/test_mcp.py`); native live verification on 4.7.x is
+pending in `dev/mcp-live-test.py`. `moveStaves`, staff visibility and
+range copy/paste were exercised live on 4.7.6 during development.
 
 Version 1.0.1 has offline plugin-function, transport and real MCP stdio
 regressions. Native live checks passed on MuseScore **4.7.6** on

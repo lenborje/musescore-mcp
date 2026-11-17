@@ -157,6 +157,32 @@ class MCPBridgeTests(unittest.IsolatedAsyncioTestCase):
         malformed = await self.session.call_tool("processSequence", {"sequence": [{"action": "missing", "params": {}}]})
         self.assertTrue(malformed.isError)
 
+    async def test_staff_duplicate_lyrics_and_visibility_workflow_without_eval(self):
+        # The "hidden anglified copy staves" workflow, now via plain actions.
+        reply = await self.sequence(
+            ("insertStaff", {"instrumentId": "grand-piano", "position": 0}),
+            ("setStaffVisible", {"staff": 0, "visible": False}),
+            ("copyRange", {"srcStaff": 1, "dstStaff": 0, "startTick": 0, "endTick": 5760}),
+            ("transformLyrics", {"staff": 0, "rules": [["a", "b"]]}),
+            ("getLyrics", {"staff": 0}),
+            ("getLyrics", {"staff": 1}),
+            ("getScoreMetadata", {}))
+        results = reply["result"]["results"]
+        self.assertTrue(all(r.get("success") for r in results), reply)
+        copied = next(r for r in results if "lyrics" in r and r["lyrics"] and r["lyrics"][0]["staff"] == 0)
+        original = next(r for r in results if "lyrics" in r and r["lyrics"] and r["lyrics"][0]["staff"] == 1)
+        self.assertEqual(copied["lyrics"][0]["text"], "b\u030a")  # transformed copy
+        self.assertEqual(original["lyrics"][0]["text"], "a\u030a")  # original untouched
+        meta = results[-1]["metadata"]
+        self.assertEqual(meta["numStaves"], 3)
+        self.assertFalse(meta["staves"][0]["visible"])
+        self.assertTrue(meta["staves"][1]["visible"])
+        # one undo reverts the whole copy+transform run? no - each action is
+        # its own step; undo once removes the transform only
+        await self.sequence(("undo", {}))
+        again = await self.sequence(("getLyrics", {"staff": 0}))
+        self.assertEqual(again["result"]["results"][0]["lyrics"][0]["text"], "a\u030a")
+
     async def test_every_advertised_action_reaches_its_implementation(self):
         # This checks routing/validation, not native correctness of each API.
         duration = {"numerator": 1, "denominator": 4}
@@ -184,6 +210,18 @@ class MCPBridgeTests(unittest.IsolatedAsyncioTestCase):
             "deleteSelection": {"measure": 1},
             "processSequence": {"sequence": [{"action": "ping", "params": {}}]},
             "addInstrument": {"instrumentId": "flute"},
+            "insertStaff": {"instrumentId": "flute", "position": 0},
+            "moveStaves": {"from": [2], "toStaff": 0, "insertMode": 0},
+            "setStaffVisible": {"staff": 0, "visible": False},
+            "copyRange": {"srcStaff": 1, "dstStaff": 0, "startTick": 0, "endTick": 5760},
+            "getLyrics": {"staff": 0},
+            "setLyric": {"staff": 0, "tick": 0, "text": "b"},
+            "transformLyrics": {"rules": [["b", "c"]], "staff": 0},
+            "getLayoutBreaks": {},
+            "setLayoutBreak": {"measure": 2, "type": "page"},
+            "getInstrumentChanges": {},
+            "setInstrumentChange": {"staff": 0, "tick": 0, "instrumentId": "grand-piano"},
+            "clearVoice": {"staff": 0, "voice": 3},
         }
         source = (ROOT / "musescore-mcp-plugin.qml").read_text()
         names = set(json.loads(re.search(r"var validCommands = (\[.*?\]);", source, re.S).group(1)))

@@ -234,6 +234,149 @@ return result;
 The staff must exist before you write to it (create staves via the
 `addInstrument` action if needed). Note the bounded loops everywhere.
 
+## Recipe: generate/update Cantai vocal staves (with optional anglification)
+
+Goal: for every sung staff (soloist or choir voice), create a hidden copy
+staff on top of the score that Cantai can sing, optionally with the lyrics
+rewritten into Cantai-friendly English ("anglified"). No `run_qml` needed -
+everything below is plain `processSequence` actions. Terminology: a
+"system" in the instrument sense = a staff/part; the copies are new staves
+placed at the top of the score (the top of the first ackolad), in the same
+order as the originals.
+
+### Step 1 - identify the sung staves
+
+Read `getScoreMetadata` (per staff: `partName`, `instrument`) and
+`getMixerInfo` (per part: `partName`, `instrumentId`, staff range). The
+mixer track name itself is read-only in the plugin API, so classify by
+part/instrument name. Typical patterns (case-insensitive, Swedish and
+English):
+
+| Voice | Matches |
+|---|---|
+| soprano | `sopran`, `soprano` |
+| mezzo | `mezzo` |
+| alto | `alt`, `alto` (careful: not "altar") |
+| countertenor | `countertenor`, `counter-tenor` |
+| tenor | `tenor` |
+| baritone | `baryton`, `bariton`, `baritone` |
+| bass | `bas`, `bass` |
+
+If a name matches nothing (or matches ambiguously, e.g. a piano part named
+"Alt"), **ask the user** which staves are sung before creating copies.
+
+### Step 2 - one hidden copy staff per source voice, on top, original order
+
+For each sung original staff `s` (top to bottom), for each voice `v` that
+actually has content (`getVoices {staff: s, perMeasure: true}` -> `hasContent`):
+
+```json
+{"action": "insertStaff", "params": {"instrumentId": "<same as original>", "position": 0}}
+```
+
+Insert at `position: 0` in the same order as the originals so the copies
+end up on top in original order (or insert all at the end and reorder once
+with `moveStaves`). Then copy exactly that voice into the new staff:
+
+```json
+{"action": "copyRange", "params": {"srcStaff": s, "dstStaff": d, "voice": v, "startTick": 0, "endTick": <scoreEnd>}}
+```
+
+(`copyRange` with `voice` copies only that voice, lyrics included; without
+`voice` it pastes the whole staff via native copy/paste.) Finally hide the
+copy: `{"action": "setStaffVisible", "params": {"staff": d, "visible": false}}`.
+
+**Voice mapping:** the voice index is preserved - source voice 2 lands in
+voice 2 of the target, exactly like a GUI paste.
+
+**Normalize + cleanup (do this per copy staff before anglifying).** The
+first voice is index **0** in this API (MuseScore's GUI calls it "voice 1").
+After `copyRange {voice: v}` the copy staff carries its content in voice
+`v`; normalize it into voice 0 and remove the leftover rests that the swap
+pushes into the other voice:
+
+```json
+{"action": "swapVoices", "params": {"voice1": 0, "voice2": v, "startStaff": d, "endStaff": d+1, "startTick": 0, "endTick": <scoreEnd>}}
+{"action": "clearVoice", "params": {"staff": d, "voice": v}}
+```
+
+(`swapVoices` needs whole-measure range boundaries; 0..scoreEnd is fine.
+`clearVoice` only deletes rests - if the voice still has pitched content it
+refuses with an error, which is your signal that the copy went wrong. Run
+`clearVoice` for every voice 1-3 of the copy staff if unsure.)
+
+**Choir divisi rules (implicit voices and chords).** Two common cases in
+vocal scores, both handled at the recipe level:
+
+1. *Implicit doubling:* if a staff is known to be divisi (e.g. "Bas 1" +
+   "Bas 2" sung from one system) but a voice has no explicitly notated
+   notes/rests, voice 1 sounds for it too. Rule: for a target slot whose
+   voice `v` has no explicit content, copy **voice 0** into it instead:
+   `copyRange {srcStaff: s, dstStaff: d, voice: 0, ...}`.
+2. *Chords in one voice:* a chord written in voice 1 implies several
+   singers on that staff. Detect the largest chord (via `getScore`,
+   `elements[].notes.length > 1`) and split it across that many target
+   staves with `chordNote` (0-based note index; lyrics go to the first):
+   `copyRange {srcStaff: s, dstStaff: d, voice: v, chordNote: k, ...}` -
+   each target staff then carries exactly one note per chord, i.e. one
+   singer per staff, which is what you want when exporting per-staff
+   practice audio.
+
+Note: MuseScore auto-mutes a staff when you hide it - see step 4 for the
+mute fix-up order.
+
+### Step 3 - anglify the lyrics (optional, language-dependent)
+
+Only on the hidden copies. **Ask the user which language the original
+lyrics are in** (and whether to anglify at all) - the rules are
+language-specific; earlier experiments used separate plugins for Swedish
+(`CantaiSvengelska.qml`) and German (`CantaiTyska.qml`). Then apply ordered
+rules with `transformLyrics`:
+
+```json
+{"action": "transformLyrics", "params": {"staff": d, "rules": [["sj","sh"],["tj","ch"],["å","aw"],["ä","eh"],["ö","uh"],["i","ee"],["u","oo"],["y","ew"],["a","ah"],["e","eh"],["lj","y"],["j","y"]]}}
+```
+
+Rules apply in order as case-sensitive substring replacements. For
+whole-syllable fixes (e.g. hard g in Swedish "fågel"/"flyger" -> "faw-gehl"/
+"flew-gehr"), use `wholeSyllable: true` with exact tokens:
+`{"rules": [["yehl","gehl"],["yehr","gehr"]], "wholeSyllable": true}` - this
+preserves the first letter's case and never touches longer words like
+"gärna". Verify with `getLyrics {staff: d}`; the originals must stay
+untouched.
+
+### Step 4 - playback: mute originals, unmute copies, Cantai-Ottetto sounds
+
+Order matters because hiding auto-mutes:
+
+```json
+{"action": "setStaffMute", "params": {"staff": <original>, "mute": true}}
+{"action": "setStaffMute", "params": {"staff": <copy>, "mute": false}}
+```
+
+(`setStaffMute` is not undoable - restore by writing the flag back; check
+with `getMixerInfo`.)
+
+The Cantai-Ottetto **sound presets cannot be set through the live bridge**
+(the mixer `soundId` is not exposed by the plugin API). Do it offline:
+save the score, fully quit MuseScore, then
+`musescore-mcp set-mixer-sound SCORE.mscz --list` to see part ids (the new
+copies appear as extra soprano/alto/... parts) and
+`musescore-mcp set-mixer-sound SCORE.mscz --set <copyPartId>=sopranos ...`
+(altos/tenors/basses per voice class; remove `resourceMeta` from the
+original parts to reset them to the standard voice). Backups (`.bak`) are
+written next to the score.
+
+### Pitfalls
+
+- One score per plugin session; save, quit MuseScore, reopen before
+  switching target score.
+- Each action is its own undo step (`undo` reverts one); `setStaffMute` and
+  mixer channel properties are not undoable.
+- `copyRange` without `voice` must run at top level (not inside `run_qml`).
+- Inserting staves shifts staff indices - re-read `getScoreMetadata` after
+  each structural change and track the mapping original -> copy.
+
 ## Verification status
 
 Offline regressions execute the actual plugin functions with a native API
